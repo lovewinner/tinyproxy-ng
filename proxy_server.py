@@ -175,7 +175,6 @@ class StatsCollector:
 
     def conn_opened(self):
         self.total_connections += 1
-        self.total_idle_connections += 1
         self._period_connections += 1
         self.active_connections += 1
 
@@ -710,8 +709,10 @@ class ProxyServer:
             pass
         self._active_writers.discard(writer)
         self.stats.conn_closed()
-        # Remove from dashboard tracking
-        self._active_connections.pop(rid, None)
+        # Remove from dashboard tracking; count idle connections for stats
+        ct = self._active_connections.pop(rid, None)
+        if ct:
+            self.stats.total_idle_connections += 1
 
     def _tune_socket(self, sock, keepalive=False):
         try:
