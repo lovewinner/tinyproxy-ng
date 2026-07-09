@@ -1,0 +1,89 @@
+# Default configuration file (example)
+# Copy this file to config.yaml and edit for your setup
+
+# Server listen configuration
+host: 0.0.0.0              # Listen address
+                            # - 0.0.0.0: All interfaces (LAN devices can connect)
+                            # - 127.0.0.1: Local only (most secure)
+                            # - 192.168.1.100: Specific IP
+
+port: 8080                 # Listen port
+                            # Common ports: 8080, 8888, 1080, 3128
+                            # Windows: recommend >1024
+                            # Linux/macOS: ports <1024 require root
+
+# Authentication configuration
+auth_enabled: true         # Enable authentication
+                            # true: username/password required
+                            # false: no auth (internal network only)
+
+username: admin            # Auth username (recommend changing)
+password: password123      # Auth password (must change to a strong one!)
+
+# Upstream proxy (optional)
+# If your server needs another proxy to reach the internet, configure here:
+# Supports HTTP/HTTPS and SOCKS5 protocols:
+#
+# upstream_proxies:
+#   http: http://upstream-proxy:8080          # HTTP upstream
+#   https: http://upstream-proxy:8443         # HTTPS upstream
+#   # Or use SOCKS5 (requires aiohttp-socks):
+#   # http: socks5://127.0.0.1:7890          # SOCKS5 upstream (adjust port)
+#   # https: socks5://127.0.0.1:7890         # SOCKS5 upstream
+#   # SOCKS5 with auth:
+#   # http: socks5://user:pass@127.0.0.1:7890
+#
+# Notes:
+# - If not configured, the proxy connects directly to target servers
+# - http/https control upstream for HTTP and HTTPS traffic respectively
+# - SOCKS5 upstream requires: pip install aiohttp-socks
+
+# SSL certificate (optional)
+# Usually not needed unless you want the proxy itself to serve HTTPS
+# ssl_cert: /path/to/cert.pem
+# ssl_key: /path/to/key.pem
+
+# Concurrency control (optional)
+max_connections: 500          # Max concurrent connections, prevents resource exhaustion
+
+# Stability parameters (optional)
+max_body_size: 10485760       # Max request body bytes (default 10MB), returns 413 if exceeded
+tunnel_idle_timeout: 180      # CONNECT tunnel idle timeout in seconds, auto-close when idle
+max_tunnel_lifetime: 300      # Max CONNECT tunnel lifetime in seconds (5min), prevents leaked long connections
+
+# Download tunnel timeout (optional)
+# Hosts matching download_hosts automatically use this timeout to avoid interrupting large downloads
+max_tunnel_lifetime_download: 7200  # Download tunnel max lifetime in seconds (2h)
+download_hosts:                    # Hosts auto-detected as download targets (glob patterns)
+  - "*.github.com"
+  - "objects.githubusercontent.com"
+  - "raw.githubusercontent.com"
+  - "*.githubusercontent.com"
+header_timeout: 15            # Request header read timeout in seconds, prevents Slowloris attacks
+
+# Performance tuning (optional)
+io_buffer_size: 65536         # I/O buffer size (bytes), default 64KB
+socket_sndbuf: 262144         # Socket send buffer, default 256KB
+socket_rcvbuf: 262144         # Socket receive buffer, default 256KB
+max_keepalive_requests: 100   # Max keep-alive requests per connection
+keepalive_timeout: 30         # Keep-Alive idle timeout in seconds
+
+# Log file configuration (optional)
+# log_file: proxy.log           # Log file path (empty = stdout only)
+# log_max_size: 10485760        # Max single log file size (10MB)
+# log_backup_count: 5           # Number of historical log files to keep
+slow_request_threshold: 5.0    # Slow request threshold (seconds), logs WARNING when exceeded
+
+# Stats configuration (optional)
+stats_interval: 60            # Stats log interval in seconds (0 = disable periodic logging)
+stats_file: stats.json        # Stats persistence file path
+stats_host: proxy-stats       # HTTP stats endpoint Host header (visit http://proxy-stats/)
+
+# Terminal Dashboard mode (optional)
+# Periodically refreshes live monitoring info: active connections, tunnels, bytes, etc.
+# When enabled, terminal log level auto-switches to WARNING (full logs still written to file).
+display_interval: 5           # Terminal refresh interval in seconds (0 = traditional log mode, >0 = Dashboard mode)
+
+# Log level
+log_level: INFO
+# Options: DEBUG (most verbose), INFO, WARNING, ERROR (errors only)
