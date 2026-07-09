@@ -81,7 +81,7 @@ When `display_interval > 0`, the terminal enters live Dashboard mode and refresh
 
 ```
 +========================================================================================================================+
-| Proxy 0.0.0.0:26128  |  Active:18  TUN:9  IDLE:0/5  UP:3h49m  |  Total↑2.1 MB ↓88.6 MB                                 |
+| Proxy 0.0.0.0:26128  |  Active:18  TUN:9  DONE:5  UP:3h49m  |  Total↑2.1 MB ↓88.6 MB                                 |
 +========================================================================================================================+
 | 192.168.1.100   TUN 36m51s       UP:  4.7 KB  DOWN:  4.4 KB                                                            |
 | 192.168.1.100   TUN 12m46s       UP:  3.5 KB  DOWN:  5.5 KB                                                            |
@@ -104,7 +104,7 @@ Header fields:
 |--------|-------------|
 | **Active** | Current active connections |
 | **TUN** | Tunnel count |
-| **IDLE** | `{currently active}/{total historically seen}` idle connections |
+| **DONE** | Total disconnected connections |
 | **UP** | Server uptime |
 | **Total↑↓** | Total upload/download bytes for **the current session** (resets on restart) |
 

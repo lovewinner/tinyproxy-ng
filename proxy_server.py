@@ -1112,7 +1112,6 @@ class ProxyServer:
         uptime_str = f"{h}h{m:02d}m" if h else f"{m}m{s:02d}s"
         active_conn = len(self._active_connections)
         active_tun = sum(1 for ct in self._active_connections.values() if ct.mode == 'tunnel')
-        active_idle = sum(1 for ct in self._active_connections.values() if ct.mode == 'idle')
         total_idle = self.stats.total_idle_connections
         # Use session bytes (reset on restart), not total (persistent across restarts)
         total_str = f"Total↑{_format_bytes(self.stats.session_bytes_sent)} ↓{_format_bytes(self.stats.session_bytes_received)}"
@@ -1121,7 +1120,7 @@ class ProxyServer:
         sep = '=' * W
         lines = []
         lines.append('+' + sep + '+')
-        header = f" Proxy {self.host}:{self.port}  |  Active:{active_conn}  TUN:{active_tun}  IDLE:{active_idle}/{total_idle}  UP:{uptime_str}  |  {total_str} "
+        header = f" Proxy {self.host}:{self.port}  |  Active:{active_conn}  TUN:{active_tun}  DONE:{total_idle}  UP:{uptime_str}  |  {total_str} "
         lines.append('|' + _ljust_display(header, W) + '|')
         lines.append('+' + sep + '+')
 
