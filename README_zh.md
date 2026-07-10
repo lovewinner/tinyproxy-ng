@@ -74,6 +74,9 @@ python proxy_server.py --host 127.0.0.1 --port 8888 --user admin --passwd secret
 | `slow_request_threshold` | 5.0s | 慢请求告警阈值 |
 | `stats_interval` | 60s | 统计日志/快照间隔 |
 | `display_interval` | 5s | 终端 Dashboard 刷新间隔（0=传统日志） |
+| `rate_limit_enabled` | false | 启用每 IP 频率限制 |
+| `rate_limit_per_minute` | 300 | 每 IP 每分钟最大请求数 |
+| `dns_cache_ttl` | 300s | 直连 CONNECT 隧道 DNS 缓存 TTL |
 | `drain_timeout` | 30s | 单次客户端 drain 超时；防止慢客户端导致永久挂起 |
 | `max_request_line_size` | 16384 | 请求 URL 最大长度；超长返回 414 URI Too Long |
 

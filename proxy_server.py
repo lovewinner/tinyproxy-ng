@@ -400,10 +400,6 @@ class ProxyServer:
         self.auth_enabled = config.get('auth_enabled', True)
         # Upstream proxy config (optional)
         self.upstream_proxies = config.get('upstream_proxies', {})
-        # SSL cert (not used yet)
-        self.ssl_cert = config.get('ssl_cert')
-        self.ssl_key = config.get('ssl_key')
-
         # Concurrency semaphore: limits simultaneous connections to prevent resource exhaustion
         self.max_connections = config.get('max_connections', 500)
         self._semaphore = asyncio.Semaphore(self.max_connections)
@@ -554,25 +550,6 @@ class ProxyServer:
         conn_header = resp.headers.get('Connection', '').lower()
         return any(p.strip() == 'close' for p in conn_header.split(','))
 
-    async def _resolve_host(self, host: str) -> str:
-        now = time.monotonic()
-        entry = self._dns_cache.get(host)
-        if entry and now - entry['time'] < self._dns_ttl:
-            return entry['addr']
-        infos = await asyncio.get_event_loop().getaddrinfo(
-            host, 0, type=socket.SOCK_STREAM
-        )
-        for family, _, _, _, sockaddr in infos:
-            if family == socket.AF_INET:
-                addr = sockaddr[0]
-                self._dns_cache[host] = {'time': now, 'addr': addr}
-                return addr
-        if infos:
-            addr = infos[0][4][0]
-            self._dns_cache[host] = {'time': now, 'addr': addr}
-            return addr
-        raise OSError(f"Cannot resolve {host}")
-
     async def _safe_drain(self, writer: asyncio.StreamWriter):
         try:
             await asyncio.wait_for(writer.drain(), timeout=self.drain_timeout)
@@ -616,14 +593,13 @@ class ProxyServer:
             resp = b'HTTP/1.1 429 Too Many Requests\r\nConnection: close\r\n\r\nRate limit exceeded'
             self.stats.add_bytes(sent=len(resp))
             writer.write(resp)
-            await writer.drain()
+            await self._safe_drain(writer)
             writer.close()
             try:
                 await writer.wait_closed()
             except Exception:
                 pass
             self._active_writers.discard(writer)
-            self.stats.conn_closed()
             return
 
         # Dashboard tracking
@@ -660,7 +636,7 @@ class ProxyServer:
                 if len(parts) != 3:
                     self.stats.add_bytes(sent=len(b'HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n'))
                     writer.write(b'HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n')
-                    await writer.drain()
+                    await self._safe_drain(writer)
                     break
                 method, target, version = parts
 
@@ -683,7 +659,7 @@ class ProxyServer:
                     resp = f'HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm="Proxy"\r\nContent-Type: text/plain\r\n\r\n{error_msg}'
                     self.stats.add_bytes(sent=len(resp))
                     writer.write(resp.encode('utf-8'))
-                    await writer.drain()
+                    await self._safe_drain(writer)
                     break
 
                 stats_host_value = headers.get('Host', '').split(':')[0]
@@ -695,7 +671,7 @@ class ProxyServer:
                             f'Connection: close\r\n\r\n{stats_json}')
                     self.stats.add_bytes(sent=len(resp))
                     writer.write(resp.encode('utf-8'))
-                    await writer.drain()
+                    await self._safe_drain(writer)
                     break
 
                 if method in ('GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS'):
@@ -736,7 +712,7 @@ class ProxyServer:
                 else:
                     self.stats.add_bytes(sent=len(b'HTTP/1.1 405 Method Not Allowed\r\nConnection: close\r\n\r\n'))
                     writer.write(b'HTTP/1.1 405 Method Not Allowed\r\nConnection: close\r\n\r\n')
-                    await writer.drain()
+                    await self._safe_drain(writer)
                     break
 
             except (ConnectionResetError, BrokenPipeError, ConnectionAbortedError):
@@ -748,14 +724,13 @@ class ProxyServer:
         try:
             writer.close()
             try:
-                await writer.wait_closed()
+                await asyncio.wait_for(writer.wait_closed(), timeout=5)
             except Exception:
                 pass
         except Exception:
             pass
         self._active_writers.discard(writer)
         self.stats.conn_closed()
-        # Remove from dashboard tracking; count idle connections for stats
         ct = self._active_connections.pop(rid, None)
         if ct:
             self.stats.total_disconnected += 1
@@ -798,11 +773,6 @@ class ProxyServer:
                 finally:
                     try:
                         remote_writer.close()
-                        await remote_writer.wait_closed()
-                    except Exception:
-                        pass
-                    try:
-                        remote_reader.feed_eof()
                     except Exception:
                         pass
             else:
@@ -941,14 +911,14 @@ class ProxyServer:
                 if ct:
                     ct.bytes_sent += len(resp)
                 writer.write(resp)
-                await writer.drain()
+                await self._safe_drain(writer)
                 return None
 
             # Notify client that tunnel is established
             resp = b'HTTP/1.1 200 Connection Established\r\n\r\n'
             self.stats.add_bytes(sent=len(resp))
             writer.write(resp)
-            await writer.drain()
+            await self._safe_drain(writer)
 
             # Return tunnel connection, handle_client will forward traffic after releasing semaphore
             return (remote_reader, remote_writer)
@@ -959,7 +929,7 @@ class ProxyServer:
                 resp = b'HTTP/1.1 500 Internal Server Error\r\n\r\n'
                 self.stats.add_bytes(sent=len(resp))
                 writer.write(resp)
-                await writer.drain()
+                await self._safe_drain(writer)
             except Exception:
                 pass
             return None
@@ -977,7 +947,7 @@ class ProxyServer:
                     if cl > self.max_body_size:
                         self.stats.add_bytes(sent=len(b'HTTP/1.1 413 Payload Too Large\r\nConnection: close\r\n\r\n'))
                         writer.write(b'HTTP/1.1 413 Payload Too Large\r\nConnection: close\r\n\r\n')
-                        await writer.drain()
+                        await self._safe_drain(writer)
                         return False
                     body = await reader.readexactly(cl)
                     self.stats.add_bytes(sent=len(body))
@@ -1000,23 +970,19 @@ class ProxyServer:
                         if len(body) + chunk_size > self.max_body_size:
                             self.stats.add_bytes(sent=len(b'HTTP/1.1 413 Payload Too Large\r\nConnection: close\r\n\r\n'))
                             writer.write(b'HTTP/1.1 413 Payload Too Large\r\nConnection: close\r\n\r\n')
-                            await writer.drain()
-                            # Drain remaining chunk data to keep reader in sync
+                            await self._safe_drain(writer)
                             while True:
                                 try:
-                                    leftover = await reader.readexactly(chunk_size)
+                                    await reader.readexactly(chunk_size)
                                     await reader.readline()
+                                    size_line = await reader.readline()
+                                    if not size_line:
+                                        break
+                                    chunk_size = int(size_line.strip(), 16)
+                                    if chunk_size == 0:
+                                        await reader.readline()
+                                        break
                                 except Exception:
-                                    break
-                                chunk_size_line = await reader.readline()
-                                if not chunk_size_line:
-                                    break
-                                try:
-                                    chunk_size = int(chunk_size_line.strip(), 16)
-                                except (ValueError, AttributeError):
-                                    break
-                                if chunk_size == 0:
-                                    await reader.readline()
                                     break
                             return False
                         body += await reader.readexactly(chunk_size)
@@ -1032,7 +998,7 @@ class ProxyServer:
                 if not host:
                     self.stats.add_bytes(sent=len(b'HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\nMissing Host header'))
                     writer.write(b'HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\nMissing Host header')
-                    await writer.drain()
+                    await self._safe_drain(writer)
                     return False
                 url = f'http://{host}{target}' if target.startswith('/') else f'http://{host}/{target}'
 
@@ -1139,7 +1105,7 @@ class ProxyServer:
             logger.error(f"{_rid_prefix()}HTTP forward failed: {e}")
             try:
                 writer.write(b'HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n')
-                await writer.drain()
+                await self._safe_drain(writer)
             except Exception:
                 pass
             return False
@@ -1149,7 +1115,7 @@ class ProxyServer:
             logger.error(f"HTTP forward timeout")
             try:
                 writer.write(b'HTTP/1.1 504 Gateway Timeout\r\nConnection: close\r\n\r\n')
-                await writer.drain()
+                await self._safe_drain(writer)
             except Exception:
                 pass
             return False
@@ -1163,7 +1129,7 @@ class ProxyServer:
         rid = _request_id.get()
         has_content_length = False
         try:
-            writer.write(f'HTTP/1.1 {resp.status} {resp.reason}\r\n'.encode('utf-8'))
+            writer.write(f'HTTP/1.1 {resp.status} {resp.reason or ""}\r\n'.encode('utf-8'))
             writer.write(b'Via: 1.1 tinyproxy-ng\r\n')
             for key, value in resp.headers.items():
                 kl = key.lower()
@@ -1230,18 +1196,12 @@ class ProxyServer:
                     await asyncio.shield(dst_writer.drain())
                 except Exception:
                     pass
-                try:
-                    dst_writer.close()
-                    await dst_writer.wait_closed()
-                except Exception:
-                    pass
                 raise
             except Exception as e:
                 logger.debug(f"Tunnel {name} forward ended: {e}")
             finally:
                 try:
                     dst_writer.close()
-                    await dst_writer.wait_closed()
                 except Exception:
                     pass
 
@@ -1263,12 +1223,10 @@ class ProxyServer:
             # Ensure all connections are closed
             try:
                 remote_writer.close()
-                await remote_writer.wait_closed()
             except Exception:
                 pass
             try:
                 client_writer.close()
-                await client_writer.wait_closed()
             except Exception:
                 pass
         self.stats.record_tunnel_duration(time.perf_counter() - tunnel_start)

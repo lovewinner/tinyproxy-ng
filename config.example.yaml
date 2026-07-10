@@ -50,6 +50,17 @@ max_connections: 500          # Max concurrent connections, prevents resource ex
 max_body_size: 10485760       # Max request body bytes (default 10MB), returns 413 if exceeded
 tunnel_idle_timeout: 180      # CONNECT tunnel idle timeout in seconds, auto-close when idle
 max_tunnel_lifetime: 300      # Max CONNECT tunnel lifetime in seconds (5min), prevents leaked long connections
+max_request_line_size: 16384  # Max request URL length (default 16KB), returns 414 if exceeded
+
+# Rate limiting (optional)
+rate_limit_enabled: false     # Enable per-IP rate limiting (true/false)
+rate_limit_per_minute: 300    # Max requests per minute per client IP
+
+# DNS cache (optional)
+dns_cache_ttl: 300            # DNS cache TTL in seconds for direct CONNECT tunnels
+
+# Client drain timeout (optional)
+drain_timeout: 30             # Per-write drain timeout in seconds, prevents hangs on slow clients
 
 # Download tunnel timeout (optional)
 # Hosts matching download_hosts automatically use this timeout to avoid interrupting large downloads
