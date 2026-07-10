@@ -2,52 +2,55 @@
 
 > **中文** | [English](README.md)
 
-基于 Python asyncio + aiohttp 的高性能 HTTP/HTTPS 代理服务器，支持认证、CONNECT 隧道、上游代理链、统计监控与自动恢复。
+轻量 Python asyncio HTTP/HTTPS 代理服务器，支持认证、CONNECT 隧道、上游代理链、速率限制和实时终端面板。单文件约 1500 行，pip 仅需两个依赖。
 
-## Feature
+---
 
-- HTTP/HTTPS 代理（CONNECT 隧道）
-- HTTP Basic 认证（`hmac.compare_digest` 时序安全）
-- 上游代理链（HTTP 上游：转发 + CONNECT 均支持；SOCKS5 上游：仅 HTTP 转发支持，需安装 aiohttp-socks）
-- Happy Eyeballs 全地址重试（直连 CONNECT 隧道）
-- 每 IP 频率限制（可配置请求/分钟窗口）
-- 全局连接池复用 + DNS 缓存（可配 TTL）+ TCP 参数调优
-- CONNECT 隧道：闲置超时（180s）+ 最长存活 + 每地址连接超时
-- 下载主机自动匹配延长存活时间（`download_hosts`）
-- 客户端 drain 超时保护（`drain_timeout`）；防止慢客户端导致永久挂起
-- 请求 URL 长度限制（`max_request_line_size`）；超长返回 414
-- 请求体大小限制（`max_body_size`）；超限返回 413 并清空剩余 chunk
-- 慢请求检测 + 请求级追踪 ID
-- 日志轮转（RotatingFileHandler）
-- 内置统计系统（JSON + HTTP 端点，原子写入）
-- 指数退避重试 + 信号量并发控制
-- 优雅关闭（5s 等待 + 强制清理）
-- 响应重组 chunk：剥离上游 hop-by-hop 头，缺失 Content-Length 时自动重新分块
-- **终端实时 Dashboard**：显示活跃连接、隧道、HTTP 请求、字节量，每 N 秒刷新
-- **会话统计**：Dashboard Total↑↓ 重启归零；`stats.json` 保存历史累计
+## 1. 能做什么
 
-## Requirements
+- 接受浏览器、CLI 工具 (`curl -x`) 或系统级代理设置的 HTTP 代理请求。
+- HTTP 流量转发到目标服务器；HTTPS 建立 CONNECT 隧道后透传原始 TCP。
+- 服务器自身无法直连外网时，可通过上游代理（HTTP 或 SOCKS5）链式转发。
+- 可选每 IP 速率限制 + Basic 认证防止滥用。
+- 终端实时面板展示活跃连接、隧道和流量吞吐。
+- 累计统计（JSON API + 本地持久化）用于长期监控。
 
-- Python 3.8+
-- `pip install aiohttp pyyaml`
+---
 
-## Quick Start
+## 2. 快速上手
+
+### 安装依赖
 
 ```bash
-# 1. 安装依赖
 pip install aiohttp pyyaml
+```
 
-# 2. 复制配置并修改
+需 Python 3.8+。如需 SOCKS5 上游，追加 `pip install aiohttp-socks`。
+
+### 配置
+
+```bash
 cp config.example.yaml config.yaml
-# 编辑 config.yaml，修改 username 和 password
+```
 
-# 3. 启动
+编辑 `config.yaml`，至少改一下用户名和密码：
+
+```yaml
+auth_enabled: true
+username: myuser
+password: mypass
+port: 8080     # 可按需修改
+```
+
+如果不需要上游代理，`upstream_proxies` 保持注释状态即可。
+
+### 启动
+
+```bash
 python proxy_server.py
 ```
 
-浏览器配置：HTTP 代理 → 服务器 IP → 端口（默认 8080）→ 启用认证。
-
-## CLI
+也可用 CLI 参数直接覆盖配置：
 
 ```bash
 python proxy_server.py --host 127.0.0.1 --port 8888 --user admin --passwd secret --debug
@@ -55,133 +58,116 @@ python proxy_server.py --host 127.0.0.1 --port 8888 --user admin --passwd secret
 
 | 参数 | 说明 |
 |------|------|
-| `-c, --config` | 配置文件路径 |
+| `-c, --config` | 配置文件路径（默认 `config.yaml`） |
 | `--host` | 监听地址 |
 | `--port` | 监听端口 |
 | `--user` | 认证用户名 |
 | `--passwd` | 认证密码 |
 | `--no-auth` | 禁用认证 |
-| `--debug` | DEBUG 日志 |
+| `--debug` | 启用 DEBUG 日志 |
 
-## Config
+### 客户端设置
 
-完整配置见 `config.example.yaml`。关键参数：
+浏览器或系统代理指向 `服务器IP:端口`，填入配置中的用户名密码。
 
-| 参数 | 默认 | 说明 |
-|------|------|------|
-| `port` | 8080 | 监听端口 |
-| `auth_enabled` | true | 启用 Basic 认证 |
-| `max_connections` | 500 | 最大并发连接数 |
-| `max_body_size` | 10MB | 请求体上限 |
-| `tunnel_idle_timeout` | 180s | 隧道闲置关闭 |
-| `max_tunnel_lifetime` | 300s | 隧道最长存活 |
-| `max_tunnel_lifetime_download` | 7200s | 下载隧道超时 |
-| `download_hosts` | `*.github.com` 等 | 自动匹配下载主机 |
-| `slow_request_threshold` | 5.0s | 慢请求告警阈值 |
-| `stats_interval` | 60s | 统计日志/快照间隔 |
-| `display_interval` | 5s | 终端 Dashboard 刷新间隔（0=传统日志） |
-| `rate_limit_enabled` | false | 启用每 IP 频率限制 |
-| `rate_limit_per_minute` | 300 | 每 IP 每分钟最大请求数 |
-| `dns_cache_ttl` | 300s | 直连 CONNECT 隧道 DNS 缓存 TTL |
-| `drain_timeout` | 30s | 单次客户端 drain 超时；防止慢客户端导致永久挂起 |
-| `max_request_line_size` | 16384 | 请求 URL 最大长度；超长返回 414 URI Too Long |
+- **Chrome/Edge**：设置 → 系统 → 打开代理设置 → 手动代理 → HTTP 代理
+- **Firefox**：设置 → 网络设置 → 手动代理配置 → HTTP 代理
+- **curl**：`curl -x http://user:pass@server:26128 https://example.com`
+- **环境变量**：`export http_proxy=http://user:pass@server:26128`
 
-## Dashboard
+---
 
-当 `display_interval > 0` 时，终端进入实时 Dashboard 模式，定时刷新显示代理状态：
+## 3. 特性与配置详解
+
+### 完整配置参数表
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `host` | `0.0.0.0` | 监听地址；`127.0.0.1` = 仅本机 |
+| `port` | `8080` | 监听端口 |
+| `auth_enabled` | `true` | 启用 HTTP Basic 认证 |
+| `username` | — | 认证用户名 |
+| `password` | — | 认证密码 |
+| `upstream_proxies` | (无) | 按协议指定上游 HTTP/SOCKS5 代理；详见 `config.example.yaml` |
+| `max_connections` | `500` | 最大并发连接数（信号量） |
+| `max_body_size` | `10 MB` | 请求体上限；超限 → 413 |
+| `max_request_line_size` | `16384` | 请求 URL 最大长度；超限 → 414 |
+| `tunnel_idle_timeout` | `180 s` | CONNECT 隧道闲置超时 |
+| `max_tunnel_lifetime` | `300 s` | CONNECT 隧道最长存活 |
+| `max_tunnel_lifetime_download` | `7200 s` | 下载类主机延长存活 |
+| `download_hosts` | `*.github.com` … | glob 匹配列表；命中则应用延长存活 |
+| `header_timeout` | `15 s` | 请求头读取超时（防 Slowloris） |
+| `drain_timeout` | `30 s` | 单次客户端 drain 超时；防慢客户端永久挂起 |
+| `io_buffer_size` | `65536` | I/O 缓冲区大小（字节） |
+| `socket_sndbuf` | `262144` | 套接字发送缓冲区 |
+| `socket_rcvbuf` | `262144` | 套接字接收缓冲区 |
+| `max_keepalive_requests` | `100` | 每条 Keep-Alive 连接最大请求数 |
+| `keepalive_timeout` | `30 s` | Keep-Alive 闲置超时 |
+| `rate_limit_enabled` | `false` | 启用每 IP 速率限制 |
+| `rate_limit_per_minute` | `300` | 每 IP 每分钟最大请求数（60 s 滑动窗口） |
+| `dns_cache_ttl` | `300 s` | 直连 CONNECT 隧道 DNS 缓存 TTL |
+| `slow_request_threshold` | `5.0 s` | 超过此阈值打印 WARNING |
+| `stats_interval` | `60 s` | 定期统计日志间隔（0 = 禁用） |
+| `stats_file` | `stats.json` | 统计数据持久化文件 |
+| `stats_host` | `proxy-stats` | 通过 HTTP 访问统计所需的 Host 头 |
+| `display_interval` | `5 s` | 终端面板刷新间隔（0 = 传统日志模式） |
+| `log_file` | (stdout) | 可选日志文件路径 |
+| `log_max_size` | `10 MB` | 日志文件最大尺寸 |
+| `log_backup_count` | `5` | 保留的历史日志文件数量 |
+| `log_level` | `INFO` | `DEBUG` / `INFO` / `WARNING` / `ERROR` |
+
+### 实时面板
+
+`display_interval > 0` 时，终端进入实时面板模式（完整日志仍写入文件）：
 
 ```
 +========================================================================================================================+
-| Proxy 0.0.0.0:8080  |  Active:18  TUN:9  DONE:5  UP:3h49m  |  Total U 2.1 MB D 88.6 MB                                 |
+| Proxy 0.0.0.0:8080  |  Active:18  TUN:9  DONE:5  UP:3h49m  |  Total U 2.1 MB D 88.6 MB                                  |
 +========================================================================================================================+
 | 192.168.1.100   TUN 36m51s       UP:  4.7 KB  DOWN:  4.4 KB                                                            |
-| 192.168.1.100   TUN 12m46s       UP:  3.5 KB  DOWN:  5.5 KB                                                            |
 | 192.168.1.100   HTTP x2          UP:  3.2 KB  DOWN:  2.6 KB  0m51s                                                     |
 +========================================================================================================================+
 ```
 
-各行含义：
+- **表头**：活跃连接 / 隧道数 / 已断开总数 / 运行时长 / 本次会话字节总量（重启归零）。
+- **行**：客户端 IP → `TUN`（隧道）或 `HTTP x{N}` → 上/下行字节 → 持续时长。
+- 已断开连接自动清理；`DONE` 递增。
 
-| 列 | 说明 |
-|----|------|
-| **IP** | 客户端地址 |
-| **Mode** | `TUN {时长}` / `HTTP x{N}` / `IDLE` |
-| **UP/DOWN** | 该连接的上下行字节 |
-| **Duration** | 连接持续时间（隧道模式显示隧道时长） |
+### 统计
 
-表头：
+统计每 `stats_interval` 输出日志，原子写入 `stats.json`。可通过 HTTP 访问：
 
-| 指标 | 说明 |
-|------|------|
-| **Active** | 当前活跃连接数 |
-| **TUN** | 隧道数 |
-| **DONE** | 已断开的连接总数 |
-| **UP** | 运行时长 |
-| **Total↑↓** | 本次会话的上下行总量（**重启归零**） |
-
-## Stats
-
-统计信息每 `stats_interval`（默认 60s）输出到日志并保存到 `stats.json`（持久化跨重启）。可通过 HTTP 访问（需认证）：
-
-```
+```bash
 curl -u user:pass http://proxy-stats/
 ```
 
-输出结构：
+响应包含 `total`（跨重启累计）、`last_period`（上一周期快照）、实时连接/隧道数和运行时长。
 
-```
-total:       自首次启动以来的累计值（持久化）
-last_period: 上个统计周期的快照（仅内存）
-```
-
-Dashboard 的 `Total↑↓` 显示的是**本次会话**的字节量（`session_bytes_sent/received`），与 `total` 不同。
-
-JSON 示例：
-
-```json
-{
-  "server": "running",
-  "started_at": 1720435200,
-  "uptime_seconds": 3600,
-  "active_connections": 5,
-  "active_tunnels": 3,
-  "total": {
-    "connections": 10000,
-    ...
-  },
-  "last_period": { ... }
-}
-```
-
-## Structure
+### 目录结构
 
 ```
 proxy-server/
-├── proxy_server.py          # 主程序
-├── config.example.yaml      # 配置示例
+├── proxy_server.py          # 主程序（约1500行）
+├── config.example.yaml      # 带注释的配置模板
 ├── requirements.txt
-├── LICENSE
-├── README.md
-├── scripts/                 # 启动 / 安装脚本
-└── tests/                   # 测试工具
-    ├── stress_test.py       # 压力测试
-    ├── test_proxy.py        # 功能测试
-    └── test_auth.py         # 认证测试
+├── LICENSE                  # MIT
+├── README.md / README_zh.md
+├── scripts/                 # 启动/安装脚本
+└── tests/                   # stress_test.py, test_proxy.py, test_auth.py
 ```
 
-## Architecture
+### 核心模块
 
-```
-Client ──TCP──> asyncio Server ──aiohttp──> Target (HTTP)
-                (handle_client)  ──Tunnel──> Target (HTTPS/CONNECT)
-```
-
-- **HTTP 请求**：解析 URL，通过 aiohttp 转发并重试/退避，流式传输响应体；上游缺 Content-Length 时自动重新分块
-- **CONNECT 隧道**：解析全部地址，逐一尝试（每地址 10s 连接超时）；双向 TCP 隧道，闲置超时 + 最长存活 + 每地址连接超时
-- **认证**：HTTP Basic，`hmac.compare_digest` 时序安全比对；拦截 407 后保活循环退出
-- **频率限制**：每 IP 滑动窗口（60s），可配置最大请求数/分钟；超限返回 429
-- **统计**：StatsCollector 累计 + 滑动窗口 + JSON 持久化（原子写入）
-- **Dashboard**：`_active_connections` 字典追踪每连接状态，`_active_display` 定时渲染；连接关闭时自动清理死连接
+| 模块 | 说明 |
+|------|------|
+| **HTTP 转发** | 解析 URL，通过 aiohttp 转发并重试/指数退避；上游缺 Content-Length 时自动重新分块。 |
+| **CONNECT 隧道** | 解析全部地址逐尝试（每地址 10 s 连接超时）；双向透传 + 闲置 + 存活双重超时。 |
+| **认证** | HTTP Basic，`hmac.compare_digest` 时序安全比对；407 后保活循环退出。 |
+| **速率限制** | 每 IP 60 s 滑动窗口；超限返回 429。 |
+| **drain 保护** | 每次客户端写入均包裹 `_safe_drain(writer)`，有超时上限，防止慢客户端永久反压挂起。 |
+| **统计** | `StatsCollector` — 双模式（持久化 `total` + 临时 `last_period`），原子 JSON 写入。 |
+| **面板** | `_active_connections` 字典追踪每连接状态；`_active_display` 定时刷新；连接关闭时自动清理死条目。 |
+| **退出** | 5 s 宽限期 → 强制关闭所有已追踪 writer + 取消任务。 |
 
 ## License
 

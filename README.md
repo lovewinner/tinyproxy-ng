@@ -1,53 +1,56 @@
 # tinyproxy-ng
 
-> **[Chinese Doc](README_zh.md)** | **English**
+> **[中文文档](README_zh.md)** | **English**
 
-A high-performance HTTP/HTTPS proxy server built on Python asyncio + aiohttp with authentication, CONNECT tunneling, upstream proxy chaining, stats monitoring, and auto-recovery.
+A lightweight Python asyncio HTTP/HTTPS proxy server with authentication, CONNECT tunneling, upstream proxy chaining, rate limiting, and a live terminal dashboard.  Single-file ~1500 LOC, pip-install only two dependencies.
 
-## Features
+---
 
-- HTTP/HTTPS proxy (CONNECT tunneling)
-- HTTP Basic authentication (htiming-safe via `hmac.compare_digest`)
-- Upstream proxy chaining (HTTP upstream: forward proxy + CONNECT tunnels; SOCKS5 upstream: forward proxy only, requires aiohttp-socks)
-- Happy Eyeballs-style full-address retry for direct CONNECT tunnels
-- Per-IP rate limiting (configurable requests/minute window)
-- Global connection pool reuse + DNS cache (configurable TTL) + TCP tuning
-- CONNECT tunnel: idle timeout (180s) + max lifetime (configurable) + per-address connect timeout
-- Auto-extended lifetime for download hosts (`download_hosts`)
-- Per-write client drain timeout (`drain_timeout`); prevents indefinite backpressure hangs
-- Max request URL length guard (`max_request_line_size`); oversized gets 414
-- Request body size limit (`max_body_size`); oversized gets 413 with clean chunk drain
-- Slow request detection + per-request tracing ID
-- Log rotation (RotatingFileHandler)
-- Built-in stats system (JSON + HTTP endpoint, atomic file writes)
-- Exponential backoff retry + semaphore concurrency control
-- Graceful shutdown (5s wait + force cleanup)
-- Response re-chunk: strips upstream hop-by-hop headers, re-wraps as chunked when Content-Length missing
-- **Live terminal Dashboard** — active connections, tunnels, HTTP requests, bytes, auto-refreshed
-- **Session-only stats** — Dashboard Total↑↓ resets on restart; `stats.json` persists historical totals
+## 1. What It Does
 
-## Requirements
+- Accepts HTTP proxy requests from browsers, CLI tools (`curl -x`), or OS-level proxy settings.
+- Forwards HTTP traffic to target servers; for HTTPS, establishes CONNECT tunnels and relays raw TCP.
+- Supports chaining through an upstream proxy (HTTP or SOCKS5) when the server itself lacks direct internet access.
+- Optional per-IP rate limiting and Basic authentication protect against abuse.
+- Live terminal dashboard shows real-time connections, tunnels, and throughput.
+- Collects cumulative stats (JSON endpoint + local persistence) for long-term monitoring.
 
-- Python 3.8+
-- `pip install aiohttp pyyaml`
+---
 
-## Quick Start
+## 2. How to Use
+
+### Install
 
 ```bash
-# 1. Install dependencies
 pip install aiohttp pyyaml
+```
 
-# 2. Copy and edit config
+Python 3.8+ required.  If you need SOCKS5 upstream, also `pip install aiohttp-socks`.
+
+### Configure
+
+```bash
 cp config.example.yaml config.yaml
-# Edit config.yaml, set username and password
+```
 
-# 3. Start
+Edit `config.yaml` — at minimum set `username` and `password`:
+
+```yaml
+auth_enabled: true
+username: myuser
+password: mypass
+port: 8080     # change if needed
+```
+
+Leave `upstream_proxies` commented out unless you need an outbound proxy.
+
+### Run
+
+```bash
 python proxy_server.py
 ```
 
-Browser setup: HTTP proxy → server IP → port (default 8080) → enable authentication.
-
-## CLI
+Or override settings via CLI:
 
 ```bash
 python proxy_server.py --host 127.0.0.1 --port 8888 --user admin --passwd secret --debug
@@ -55,134 +58,116 @@ python proxy_server.py --host 127.0.0.1 --port 8888 --user admin --passwd secret
 
 | Flag | Description |
 |------|-------------|
-| `-c, --config` | Config file path |
-| `--host` | Bind address |
-| `--port` | Bind port |
+| `-c, --config` | Config file path (default: `config.yaml`) |
+| `--host` | Listen address |
+| `--port` | Listen port |
 | `--user` | Auth username |
 | `--passwd` | Auth password |
 | `--no-auth` | Disable authentication |
-| `--debug` | DEBUG logging |
+| `--debug` | Enable DEBUG logging |
 
-## Config
+### Client Setup
 
-See `config.example.yaml` for the full configuration. Key parameters:
+Configure your browser or OS to use an HTTP proxy at `server-ip:port` with the username/password from config.
+
+- **Chrome/Edge**: Settings → System → Open proxy settings → Manual proxy → HTTP proxy
+- **Firefox**: Settings → Network Settings → Manual proxy configuration → HTTP proxy
+- **curl**: `curl -x http://user:pass@server:26128 https://example.com`
+- **Environment**: `export http_proxy=http://user:pass@server:26128`
+
+---
+
+## 3. Features & Configuration Reference
+
+### Complete Config Table
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `port` | 8080 | Listen port |
-| `auth_enabled` | true | Enable Basic auth |
-| `max_connections` | 500 | Max concurrent connections |
-| `max_body_size` | 10MB | Max request body size |
-| `tunnel_idle_timeout` | 180s | Tunnel idle close timeout |
-| `max_tunnel_lifetime` | 300s | Max tunnel lifetime |
-| `max_tunnel_lifetime_download` | 7200s | Extended tunnel timeout for downloads |
-| `download_hosts` | `*.github.com` etc. | Auto-match download hosts |
-| `slow_request_threshold` | 5.0s | Slow request warning threshold |
-| `stats_interval` | 60s | Stats log/snapshot interval |
-| `display_interval` | 5s | Dashboard refresh interval (0 = traditional log mode) |
-| `rate_limit_enabled` | false | Enable per-IP rate limiting |
-| `rate_limit_per_minute` | 300 | Max requests per minute per client IP |
-| `dns_cache_ttl` | 300s | DNS cache TTL for direct CONNECT tunnels |
-| `drain_timeout` | 30s | Per-write client drain timeout; prevents hangs on slow clients |
-| `max_request_line_size` | 16384 | Max request URL length; longer rejects with 414 URI Too Long |
+| `host` | `0.0.0.0` | Listen address; `127.0.0.1` = local only |
+| `port` | `8080` | Listen port |
+| `auth_enabled` | `true` | Enable HTTP Basic authentication |
+| `username` | — | Auth username |
+| `password` | — | Auth password |
+| `upstream_proxies` | (none) | Upstream HTTP/SOCKS5 proxy per protocol; see `config.example.yaml` |
+| `max_connections` | `500` | Max concurrent connections (semaphore) |
+| `max_body_size` | `10 MB` | Max request body; oversize → 413 |
+| `max_request_line_size` | `16384` | Max URL length; oversize → 414 |
+| `tunnel_idle_timeout` | `180 s` | CONNECT tunnel idle timeout |
+| `max_tunnel_lifetime` | `300 s` | Max CONNECT tunnel lifetime |
+| `max_tunnel_lifetime_download` | `7200 s` | Extended lifetime for download hosts |
+| `download_hosts` | `*.github.com` … | Glob patterns; matched hosts get extended lifetime |
+| `header_timeout` | `15 s` | Request header read timeout (Slowloris protection) |
+| `drain_timeout` | `30 s` | Per-write drain timeout; prevents hangs on slow clients |
+| `io_buffer_size` | `65536` | I/O buffer size (bytes) |
+| `socket_sndbuf` | `262144` | Socket send buffer |
+| `socket_rcvbuf` | `262144` | Socket receive buffer |
+| `max_keepalive_requests` | `100` | Max requests per keep-alive connection |
+| `keepalive_timeout` | `30 s` | Keep-alive idle timeout |
+| `rate_limit_enabled` | `false` | Enable per-IP rate limiting |
+| `rate_limit_per_minute` | `300` | Max requests/min per client IP (60 s sliding window) |
+| `dns_cache_ttl` | `300 s` | DNS cache TTL for direct CONNECT tunnels |
+| `slow_request_threshold` | `5.0 s` | Log WARNING if request exceeds this |
+| `stats_interval` | `60 s` | Periodic stats logging interval (0 = disable) |
+| `stats_file` | `stats.json` | Stats persistence file |
+| `stats_host` | `proxy-stats` | Host header to access stats over HTTP |
+| `display_interval` | `5 s` | Dashboard refresh interval (0 = plain log mode) |
+| `log_file` | (stdout) | Optional log file path |
+| `log_max_size` | `10 MB` | Max log file size before rotation |
+| `log_backup_count` | `5` | Number of rotated log files kept |
+| `log_level` | `INFO` | `DEBUG` / `INFO` / `WARNING` / `ERROR` |
 
-## Dashboard
+### Dashboard
 
-When `display_interval > 0`, the terminal enters live Dashboard mode and refreshes periodically:
+When `display_interval > 0`, the terminal shows a live dashboard (full logs still go to file):
 
 ```
 +========================================================================================================================+
 | Proxy 0.0.0.0:8080  |  Active:18  TUN:9  DONE:5  UP:3h49m  |  Total U 2.1 MB D 88.6 MB                                  |
 +========================================================================================================================+
 | 192.168.1.100   TUN 36m51s       UP:  4.7 KB  DOWN:  4.4 KB                                                            |
-| 192.168.1.100   TUN 12m46s       UP:  3.5 KB  DOWN:  5.5 KB                                                            |
 | 192.168.1.100   HTTP x2          UP:  3.2 KB  DOWN:  2.6 KB  0m51s                                                     |
 +========================================================================================================================+
 ```
 
-Row fields:
+- **Header**: Active connections / tunnel count / disconnected total / uptime / session byte totals (reset on restart).
+- **Rows**: Client IP → `TUN` (tunnel) or `HTTP x{N}` → up/down bytes → connection duration.
+- Disconnected connections are purged automatically; `DONE` increments.
 
-| Column | Description |
-|--------|-------------|
-| **IP** | Client address |
-| **Mode** | `TUN {duration}` / `HTTP x{N}` / `IDLE` |
-| **UP/DOWN** | Upload/download bytes for this connection |
-| **Duration** | Connection lifetime (tunnel duration shown for tunnels) |
+### Stats
 
-Header fields:
+Stats are logged every `stats_interval` and atomically persisted to `stats.json`.  Access via HTTP:
 
-| Metric | Description |
-|--------|-------------|
-| **Active** | Current active connections |
-| **TUN** | Tunnel count |
-| **DONE** | Total disconnected connections |
-| **UP** | Server uptime |
-| **Total↑↓** | Total upload/download bytes for **the current session** (resets on restart) |
-
-## Stats
-
-Stats are logged every `stats_interval` (default 60s) and saved to `stats.json` (persisted across restarts). Accessible via HTTP (requires auth):
-
-```
+```bash
 curl -u user:pass http://proxy-stats/
 ```
 
-Structure:
+Response includes a `total` section (cumulative across restarts), a `last_period` snapshot, live connection/tunnel counts, and uptime.
 
-```
-total:       Cumulative values since first start (persistent)
-last_period: Snapshot of the last period (in-memory only)
-```
-
-The Dashboard's `Total↑↓` displays **session-only** byte counts (`session_bytes_sent/received`), separate from the persistent `total`.
-
-JSON example:
-
-```json
-{
-  "server": "running",
-  "started_at": 1720435200,
-  "uptime_seconds": 3600,
-  "active_connections": 5,
-  "active_tunnels": 3,
-  "total": {
-    "connections": 10000,
-    ...
-  },
-  "last_period": { ... }
-}
-```
-
-## Structure
+### Structure
 
 ```
 proxy-server/
-├── proxy_server.py          # Main program
-├── config.example.yaml      # Example config
+├── proxy_server.py          # Main program (~1500 LOC)
+├── config.example.yaml      # Annotated config template
 ├── requirements.txt
-├── LICENSE
-├── README.md                # English README
-├── README_zh.md             # Chinese documentation
-├── scripts/                 # Startup / install scripts
-└── tests/                   # Test tools
-    ├── stress_test.py       # Load test
-    ├── test_proxy.py        # Functional test
-    └── test_auth.py         # Auth test
+├── LICENSE                  # MIT
+├── README.md / README_zh.md
+├── scripts/                 # Startup / install helpers
+└── tests/                   # stress_test.py, test_proxy.py, test_auth.py
 ```
 
-## Architecture
+### Key Internals
 
-```
-Client ──TCP──> asyncio Server ──aiohttp──> Target (HTTP)
-                (handle_client)  ──Tunnel──> Target (HTTPS/CONNECT)
-```
-
-- **HTTP requests**: Parses URL, forwards via aiohttp with retry + backoff, streams response body; auto re-chunks when upstream omits Content-Length
-- **CONNECT tunnels**: Resolves all addresses, tries each with per-address 10s timeout; bidirectional TCP tunnel with idle timeout + max lifetime + per-address connect timeout
-- **Auth**: HTTP Basic with `hmac.compare_digest`; breaks keep-alive loop after 407
-- **Rate limiting**: Per-IP sliding window (60s), configurable max requests/min; rejects with 429
-- **Stats**: `StatsCollector` with cumulative counters + sliding window + JSON persistence (atomic writes)
-- **Dashboard**: `_active_connections` dict tracks per-connection state; `_active_display` renders periodically; dead connections purged on close
+| Module | Description |
+|--------|-------------|
+| **HTTP forward** | Parses URL, forwards via aiohttp with retry + exponential backoff; re-chunks response when upstream omits Content-Length. |
+| **CONNECT tunnel** | Resolves all addresses, tries each with per-address 10 s connect timeout; bidirectional relay with idle + lifetime timeouts. |
+| **Auth** | HTTP Basic via `hmac.compare_digest` (timing-safe). 407 breaks keep-alive loop. |
+| **Rate limit** | Per-IP 60 s sliding window; 429 when exceeded. |
+| **Drain protection** | Every client write is wrapped in `_safe_drain(writer)` with configurable timeout; prevents indefinite backpressure hangs. |
+| **Stats** | `StatsCollector` — dual-layer (persistent `total` + ephemeral `last_period`), atomic JSON writes. |
+| **Dashboard** | `_active_connections` dict per connection; `_active_display` periodic render; dead entries purged on close. |
+| **Shutdown** | 5 s grace period then force-close all tracked writers + cancel tasks. |
 
 ## License
 
