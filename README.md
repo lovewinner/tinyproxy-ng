@@ -74,6 +74,8 @@ See `config.example.yaml` for the full configuration. Key parameters:
 | `slow_request_threshold` | 5.0s | Slow request warning threshold |
 | `stats_interval` | 60s | Stats log/snapshot interval |
 | `display_interval` | 5s | Dashboard refresh interval (0 = traditional log mode) |
+| `drain_timeout` | 30s | Per-write client drain timeout; prevents hangs on slow clients |
+| `max_request_line_size` | 16384 | Max request URL length; longer rejects with 414 URI Too Long |
 
 ## Dashboard
 

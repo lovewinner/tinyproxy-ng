@@ -452,6 +452,12 @@ class ProxyServer:
         self._dns_ttl = config.get('dns_cache_ttl', 300)
         self._dns_cache: Dict[str, dict] = {}
 
+        # Max request line / URL length guard (reject pathological requests)
+        self.max_request_line_size = config.get('max_request_line_size', 16384)  # 16KB
+
+        # Per-write drain timeout to client (prevent indefinite backpressure hangs)
+        self.drain_timeout = config.get('drain_timeout', 30)
+
         # Dashboard terminal refresh mode
         self.display_interval = config.get('display_interval', 5)
         self._active_connections: Dict[int, _ConnTrack] = {}
@@ -566,6 +572,13 @@ class ProxyServer:
             self._dns_cache[host] = {'time': now, 'addr': addr}
             return addr
         raise OSError(f"Cannot resolve {host}")
+
+    async def _safe_drain(self, writer: asyncio.StreamWriter):
+        try:
+            await asyncio.wait_for(writer.drain(), timeout=self.drain_timeout)
+        except asyncio.TimeoutError:
+            logger.warning(f"{_rid_prefix()}Client write stalled > {self.drain_timeout}s, aborting")
+            raise
 
     async def _read_headers(self, reader: asyncio.StreamReader) -> Tuple[dict, int]:
         headers = {}
@@ -1006,6 +1019,13 @@ class ProxyServer:
                     return False
                 url = f'http://{host}{target}' if target.startswith('/') else f'http://{host}/{target}'
 
+            if len(url) > self.max_request_line_size:
+                logger.warning(f"{_rid_prefix()}Request URL too long ({len(url)} bytes), rejecting")
+                self.stats.add_bytes(sent=len(b'HTTP/1.1 414 URI Too Long\r\nConnection: close\r\n\r\n'))
+                writer.write(b'HTTP/1.1 414 URI Too Long\r\nConnection: close\r\n\r\n')
+                await self._safe_drain(writer)
+                return False
+
             logger.info(f"{_rid_prefix()}HTTP forward: {method} {url}")
 
             # Filter forward headers: remove proxy-specific and hop-by-hop headers
@@ -1060,7 +1080,10 @@ class ProxyServer:
                                     data=body if body else None,
                                     allow_redirects=False,
                                 ) as resp:
-                                    await self._write_response(writer, resp)
+                                    await asyncio.wait_for(
+                                        self._write_response(writer, resp),
+                                        timeout=self.drain_timeout * 4,
+                                    )
                                     if self._upstream_wants_close(resp):
                                         return False
                     else:
@@ -1069,7 +1092,10 @@ class ProxyServer:
                         if proxy_url and attempt == 0:
                             kwargs['proxy'] = proxy_url  # aiohttp native HTTP proxy
                         async with session.request(method, url, **kwargs) as resp:
-                            await self._write_response(writer, resp)
+                            await asyncio.wait_for(
+                                self._write_response(writer, resp),
+                                timeout=self.drain_timeout * 4,
+                            )
                             if self._upstream_wants_close(resp):
                                 return False
                     req_elapsed = time.perf_counter() - req_start
@@ -1142,10 +1168,10 @@ class ProxyServer:
                     writer.write(f'{len(chunk):x}\r\n'.encode() + chunk + b'\r\n')
                 else:
                     writer.write(chunk)
-                await writer.drain()
+                await self._safe_drain(writer)
             if not has_content_length:
                 writer.write(b'0\r\n\r\n')
-                await writer.drain()
+                await self._safe_drain(writer)
         except (ConnectionResetError, BrokenPipeError):
             logger.debug("Client disconnected during response transfer")
             raise Exception("Response write aborted: client disconnected")
