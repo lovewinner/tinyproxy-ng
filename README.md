@@ -63,7 +63,7 @@ See `config.example.yaml` for the full configuration. Key parameters:
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `port` | 26128 | Listen port |
+| `port` | 8080 | Listen port |
 | `auth_enabled` | true | Enable Basic auth |
 | `max_connections` | 500 | Max concurrent connections |
 | `max_body_size` | 10MB | Max request body size |

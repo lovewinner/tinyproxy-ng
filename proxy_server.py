@@ -16,6 +16,7 @@ import base64
 import collections
 import contextvars
 import gc
+import hmac
 import json
 import sys
 import os
@@ -244,8 +245,7 @@ class StatsCollector:
     def snapshot_period(self):
         """Snapshot current period to last_period, reset period accumulators"""
         self.last_period = dict(
-            duration_seconds=round(time.time() - self.started_at) if not self.last_period
-                else self.last_period.get('duration_seconds', 0),
+            duration_seconds=round(time.time() - self.started_at),
             connections=self._period_connections,
             http_requests=self._period_http_requests,
             connect_tunnels=self._period_connect_tunnels,
@@ -401,8 +401,8 @@ class ProxyServer:
         self.ssl_key = config.get('ssl_key')
 
         # Concurrency semaphore: limits simultaneous connections to prevent resource exhaustion
-        max_connections = config.get('max_connections', 500)
-        self._semaphore = asyncio.Semaphore(max_connections)
+        self.max_connections = config.get('max_connections', 500)
+        self._semaphore = asyncio.Semaphore(self.max_connections)
 
         # Request body size limit (prevent OOM)
         self.max_body_size = config.get('max_body_size', 10 * 1024 * 1024)  # 10MB
@@ -464,8 +464,8 @@ class ProxyServer:
         async with self._session_lock:
             if self._session is None or self._session.closed:
                 connector = aiohttp.TCPConnector(
-                    limit=100,                # Connection pool max connections
-                    limit_per_host=10,         # Max connections per host
+                    limit=self.max_connections,  # Match max_connections config
+                    limit_per_host=max(10, self.max_connections // 10),  # Scale with total
                     keepalive_timeout=30,      # Keepalive idle time
                     ttl_dns_cache=300,         # DNS cache TTL (seconds)
                     enable_cleanup_closed=True, # Auto-cleanup abnormally closed connections
@@ -503,7 +503,7 @@ class ProxyServer:
                 return False, "Unsupported auth type"
             decoded = base64.b64decode(auth_info).decode('utf-8')
             username, password = decoded.split(':', 1)
-            if username == self.username and password == self.password:
+            if hmac.compare_digest(username, self.username) and hmac.compare_digest(password, self.password):
                 return True, None
             else:
                 return False, "Authentication failed"
@@ -630,16 +630,15 @@ class ProxyServer:
                     if connect_tunnel is not None:
                         remote_reader, remote_writer = connect_tunnel
 
-                        # Track tunnel in dashboard using LOCAL rid
                         ct = self._active_connections.get(rid)
-                    if ct:
-                        # Mark connection as tunnel mode
-                        ct.mode = 'tunnel'
-                        ct.target = target
-                        ct.tunnel_start = time.perf_counter()
+                        if ct:
+                            ct.mode = 'tunnel'
+                            ct.target = target
+                            ct.tunnel_start = time.perf_counter()
 
-                        # Determine effective timeout: use download-level timeout for matched hosts
-                        connect_host = target.split(':')[0] if ':' in target else target
+                        connect_host = (target.split(']')[0][1:] if target.startswith('[')
+                                       else target.split(':')[0] if ':' in target
+                                       else target)
                         effective_lifetime = self.max_tunnel_lifetime
                         matched = next((p for p in self.download_hosts if fnmatch.fnmatch(connect_host, p)), None)
                         if matched:
@@ -787,8 +786,14 @@ class ProxyServer:
     async def handle_connect(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter,
                              target: str, headers: dict) -> Optional[Tuple[asyncio.StreamReader, asyncio.StreamWriter]]:
         try:
-            # Parse target address
-            if ':' in target:
+            # Parse target address (supports IPv6: [::1]:443)
+            if target.startswith('['):
+                host_end = target.find(']')
+                if host_end == -1:
+                    raise ValueError(f"Malformed IPv6 target: {target}")
+                host = target[1:host_end]
+                port = int(target[host_end + 2:]) if target[host_end + 1:].startswith(':') else 443
+            elif ':' in target:
                 host, port_str = target.split(':', 1)
                 port = int(port_str)
             else:
@@ -1010,7 +1015,9 @@ class ProxyServer:
             writer.write(f'HTTP/1.1 {resp.status} {resp.reason}\r\n'.encode('utf-8'))
             # Write response headers (filter out hop-by-hop headers)
             for key, value in resp.headers.items():
-                if key.lower() not in ['transfer-encoding', 'connection', 'content-encoding']:
+                if key.lower() not in ['transfer-encoding', 'connection', 'content-encoding',
+                                        'keep-alive', 'proxy-authenticate', 'proxy-connection',
+                                        'upgrade', 'trailer']:
                     writer.write(f'{key}: {value}\r\n'.encode('utf-8'))
             writer.write(b'\r\n')
             # Stream response body in chunks; track DOWN bytes for this connection
