@@ -76,6 +76,10 @@ See `config.example.yaml` for the full configuration. Key parameters:
 | `display_interval` | 5s | Dashboard refresh interval (0 = traditional log mode) |
 | `drain_timeout` | 30s | Per-write client drain timeout; prevents hangs on slow clients |
 | `max_request_line_size` | 16384 | Max request URL length; longer rejects with 414 URI Too Long |
+| `gh_mirror_enabled` | false | Enable GH mirror acceleration for `*.githubusercontent.com` |
+| `gh_mirror_nodes_source` | `https://github.akams.cn` | Scrape mirror nodes from this URL |
+| `gh_mirror_speed_test_count` | 5 | Nodes tested in parallel per speed check |
+| `gh_mirror_cache_ttl` | 86400s | Re-fetch mirror node list interval (24h) |
 
 ## Dashboard
 

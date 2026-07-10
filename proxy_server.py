@@ -18,13 +18,14 @@ import contextvars
 import gc
 import hmac
 import json
+import re
 import sys
 import os
 import socket
 import time
 import logging
 from logging.handlers import RotatingFileHandler
-from typing import Optional, Tuple, Dict
+from typing import Optional, Tuple, Dict, List
 from urllib.parse import urlparse
 import fnmatch
 
@@ -458,6 +459,14 @@ class ProxyServer:
         # Per-write drain timeout to client (prevent indefinite backpressure hangs)
         self.drain_timeout = config.get('drain_timeout', 30)
 
+        # GitHub mirror acceleration for *.githubusercontent.com downloads
+        self.gh_mirror_enabled = config.get('gh_mirror_enabled', False)
+        self.gh_mirror_nodes_source = config.get('gh_mirror_nodes_source', 'https://github.akams.cn')
+        self.gh_mirror_speed_test_count = config.get('gh_mirror_speed_test_count', 5)
+        self.gh_mirror_cache_ttl = config.get('gh_mirror_cache_ttl', 86400)
+        self._gh_mirror_nodes: List[str] = []
+        self._gh_mirror_nodes_fetched: float = 0
+
         # Dashboard terminal refresh mode
         self.display_interval = config.get('display_interval', 5)
         self._active_connections: Dict[int, _ConnTrack] = {}
@@ -579,6 +588,79 @@ class ProxyServer:
         except asyncio.TimeoutError:
             logger.warning(f"{_rid_prefix()}Client write stalled > {self.drain_timeout}s, aborting")
             raise
+
+    @staticmethod
+    def _is_githubusercontent_host(host: str) -> bool:
+        host_lower = host.lower().strip()
+        return host_lower.endswith('.githubusercontent.com')
+
+    async def _scrape_ghproxy_nodes(self) -> List[str]:
+        now = time.monotonic()
+        if self._gh_mirror_nodes and (now - self._gh_mirror_nodes_fetched) < self.gh_mirror_cache_ttl:
+            return self._gh_mirror_nodes
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(self.gh_mirror_nodes_source, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                    html = await resp.text()
+            chunk_urls = re.findall(r'/_next/static/chunks/([a-f0-9]+)\.js', html)
+            chunk_urls = list(set(chunk_urls))
+            nodes = []
+            async with aiohttp.ClientSession() as session:
+                for cid in chunk_urls:
+                    url = f'{self.gh_mirror_nodes_source.rstrip("/")}/_next/static/chunks/{cid}.js'
+                    try:
+                        async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                            js = await resp.text()
+                    except Exception:
+                        continue
+                    matches = re.findall(r'\{[^}]*?"value":"([^"]+)"[^}]*?\}', js)
+                    for m in matches:
+                        if '.' in m and m not in nodes:
+                            nodes.append(m)
+                    if nodes:
+                        break
+            if nodes:
+                self._gh_mirror_nodes = nodes
+                self._gh_mirror_nodes_fetched = now
+                logger.info(f"Scraped {len(nodes)} GH mirror nodes from {self.gh_mirror_nodes_source}")
+            else:
+                logger.warning("No GH mirror nodes found via scraping")
+        except Exception as e:
+            logger.warning(f"Failed to scrape GH mirror nodes: {e}")
+        return self._gh_mirror_nodes
+
+    async def _pick_github_mirror(self) -> Optional[str]:
+        nodes = await self._scrape_ghproxy_nodes()
+        if not nodes:
+            return None
+        test_count = min(self.gh_mirror_speed_test_count, len(nodes))
+        test_nodes = nodes[:test_count]
+
+        async def test_node(node: str) -> Tuple[str, float]:
+            try:
+                start = time.monotonic()
+                _, writer = await asyncio.wait_for(
+                    asyncio.open_connection(node, 443),
+                    timeout=5,
+                )
+                elapsed = time.monotonic() - start
+                writer.close()
+                try:
+                    await writer.wait_closed()
+                except Exception:
+                    pass
+                return node, elapsed
+            except Exception:
+                return node, float('inf')
+
+        results = await asyncio.gather(*[test_node(n) for n in test_nodes], return_exceptions=False)
+        results.sort(key=lambda x: x[1])
+        best = results[0]
+        if best[1] == float('inf'):
+            logger.warning("All GH mirrors failed connectivity test, falling back to direct")
+            return None
+        logger.debug(f"Fastest GH mirror: {best[0]} ({best[1]*1000:.0f}ms)")
+        return best[0]
 
     async def _read_headers(self, reader: asyncio.StreamReader) -> Tuple[dict, int]:
         headers = {}
@@ -929,6 +1011,14 @@ class ProxyServer:
 
             logger.info(f"{_rid_prefix()}CONNECT tunnel: {host}:{port}")
 
+            # GitHub mirror redirect for *.githubusercontent.com CONNECT tunnels
+            if self.gh_mirror_enabled and self._is_githubusercontent_host(host):
+                mirror = await self._pick_github_mirror()
+                if mirror:
+                    logger.info(f"{_rid_prefix()}GH mirror: redirect CONNECT {host}:{port} -> {mirror}:443")
+                    host = mirror
+                    port = 443
+
             # Connect to target (possibly via upstream proxy)
             try:
                 remote_reader, remote_writer = await self._connect_upstream(host, port)
@@ -1042,6 +1132,15 @@ class ProxyServer:
                 writer.write(b'HTTP/1.1 414 URI Too Long\r\nConnection: close\r\n\r\n')
                 await self._safe_drain(writer)
                 return False
+
+            # GitHub mirror rewrite for *.githubusercontent.com HTTP requests
+            if self.gh_mirror_enabled and url.startswith('https://'):
+                parsed_host = urlparse(url).hostname
+                if parsed_host and self._is_githubusercontent_host(parsed_host):
+                    mirror = await self._pick_github_mirror()
+                    if mirror:
+                        logger.info(f"{_rid_prefix()}GH mirror: rewrite {url}")
+                        url = f'https://{mirror}/{url}'
 
             logger.info(f"{_rid_prefix()}HTTP forward: {method} {url}")
 

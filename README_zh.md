@@ -76,6 +76,10 @@ python proxy_server.py --host 127.0.0.1 --port 8888 --user admin --passwd secret
 | `display_interval` | 5s | 终端 Dashboard 刷新间隔（0=传统日志） |
 | `drain_timeout` | 30s | 单次客户端 drain 超时；防止慢客户端导致永久挂起 |
 | `max_request_line_size` | 16384 | 请求 URL 最大长度；超长返回 414 URI Too Long |
+| `gh_mirror_enabled` | false | 启用 GitHub 镜像加速 `*.githubusercontent.com` |
+| `gh_mirror_nodes_source` | `https://github.akams.cn` | 从此 URL 爬取镜像节点列表 |
+| `gh_mirror_speed_test_count` | 5 | 每次测速并行测试的节点数 |
+| `gh_mirror_cache_ttl` | 86400s | 镜像节点列表刷新间隔（24h） |
 
 ## Dashboard
 

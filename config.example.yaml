@@ -87,3 +87,12 @@ display_interval: 5           # Terminal refresh interval in seconds (0 = tradit
 # Log level
 log_level: INFO
 # Options: DEBUG (most verbose), INFO, WARNING, ERROR (errors only)
+
+# GitHub mirror acceleration (optional)
+# When enabled, proxy redirects *.githubusercontent.com requests to the fastest
+# GH mirror node scraped from nodes_source. Significantly improves download speed
+# for raw.githubusercontent.com, objects.githubusercontent.com, etc.
+gh_mirror_enabled: false          # Enable GH mirror acceleration
+gh_mirror_nodes_source: https://github.akams.cn  # Source for mirror node list
+gh_mirror_speed_test_count: 5     # Number of nodes tested in parallel for speed selection
+gh_mirror_cache_ttl: 86400        # Re-scrape mirror node list every N seconds (default 24h)
