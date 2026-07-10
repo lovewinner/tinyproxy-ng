@@ -448,6 +448,10 @@ class ProxyServer:
         self.rate_limit_per_minute = config.get('rate_limit_per_minute', 300)
         self._ip_req_times: Dict[str, collections.deque] = {}
 
+        # DNS cache for direct CONNECT tunnels (TTL seconds)
+        self._dns_ttl = config.get('dns_cache_ttl', 300)
+        self._dns_cache: Dict[str, dict] = {}
+
         # Dashboard terminal refresh mode
         self.display_interval = config.get('display_interval', 5)
         self._active_connections: Dict[int, _ConnTrack] = {}
@@ -538,6 +542,30 @@ class ProxyServer:
             return False
         times.append(now)
         return True
+
+    @staticmethod
+    def _upstream_wants_close(resp) -> bool:
+        conn_header = resp.headers.get('Connection', '').lower()
+        return any(p.strip() == 'close' for p in conn_header.split(','))
+
+    async def _resolve_host(self, host: str) -> str:
+        now = time.monotonic()
+        entry = self._dns_cache.get(host)
+        if entry and now - entry['time'] < self._dns_ttl:
+            return entry['addr']
+        infos = await asyncio.get_event_loop().getaddrinfo(
+            host, 0, type=socket.SOCK_STREAM
+        )
+        for family, _, _, _, sockaddr in infos:
+            if family == socket.AF_INET:
+                addr = sockaddr[0]
+                self._dns_cache[host] = {'time': now, 'addr': addr}
+                return addr
+        if infos:
+            addr = infos[0][4][0]
+            self._dns_cache[host] = {'time': now, 'addr': addr}
+            return addr
+        raise OSError(f"Cannot resolve {host}")
 
     async def _read_headers(self, reader: asyncio.StreamReader) -> Tuple[dict, int]:
         headers = {}
@@ -667,57 +695,7 @@ class ProxyServer:
                         ct.request_count += 1
 
                 if method == 'CONNECT':
-                    await self._semaphore.acquire()
-                    self.stats.tunnel_opened()
-                    tunnel_start = time.perf_counter()
-                    try:
-                        connect_tunnel = await self.handle_connect(reader, writer, target, headers)
-                        if connect_tunnel is not None:
-                            remote_reader, remote_writer = connect_tunnel
-
-                            ct = self._active_connections.get(rid)
-                            if ct:
-                                ct.mode = 'tunnel'
-                                ct.target = target
-                                ct.tunnel_start = time.perf_counter()
-
-                            connect_host = (target.split(']')[0][1:] if target.startswith('[')
-                                           else target.split(':')[0] if ':' in target
-                                           else target)
-                            effective_lifetime = self.max_tunnel_lifetime
-                            matched = next((p for p in self.download_hosts if fnmatch.fnmatch(connect_host, p)), None)
-                            if matched:
-                                effective_lifetime = self.max_tunnel_lifetime_download
-                                logger.debug(f"{_rid_prefix()}Matched download host {connect_host} ({matched}), tunnel timeout {effective_lifetime}s")
-
-                            try:
-                                if effective_lifetime > 0:
-                                    await asyncio.wait_for(
-                                        self.tunnel_traffic(reader, writer, remote_writer, remote_reader),
-                                        timeout=effective_lifetime,
-                                    )
-                                else:
-                                    await self.tunnel_traffic(reader, writer, remote_writer, remote_reader)
-                            except asyncio.TimeoutError:
-                                logger.info(f"{_rid_prefix()}CONNECT {target} reached max lifetime {effective_lifetime}s, closing tunnel")
-                            finally:
-                                try:
-                                    remote_writer.close()
-                                    await remote_writer.wait_closed()
-                                except Exception:
-                                    pass
-                                try:
-                                    remote_reader.feed_eof()
-                                except Exception:
-                                    pass
-                        else:
-                            self.stats.connect_failed()
-                        self.stats.tunnel_closed()
-                        tunnel_elapsed = time.perf_counter() - tunnel_start
-                        if tunnel_elapsed > self.slow_request_threshold:
-                            logger.warning(f"{_rid_prefix()}CONNECT {target} tunnel ended | {tunnel_elapsed:.1f}s (slow, >{self.slow_request_threshold}s)")
-                    finally:
-                        self._semaphore.release()
+                    await self._handle_connect_client(reader, writer, rid, target, headers)
                     break
 
                 elif method in ('GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS'):
@@ -769,6 +747,60 @@ class ProxyServer:
         if ct:
             self.stats.total_disconnected += 1
 
+    async def _handle_connect_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter,
+                                     rid: int, target: str, headers: dict):
+        await self._semaphore.acquire()
+        self.stats.tunnel_opened()
+        tunnel_start = time.perf_counter()
+        try:
+            connect_tunnel = await self.handle_connect(reader, writer, target, headers)
+            if connect_tunnel is not None:
+                remote_reader, remote_writer = connect_tunnel
+
+                ct = self._active_connections.get(rid)
+                if ct:
+                    ct.mode = 'tunnel'
+                    ct.target = target
+                    ct.tunnel_start = time.perf_counter()
+
+                connect_host = (target.split(']')[0][1:] if target.startswith('[')
+                               else target.split(':')[0] if ':' in target
+                               else target)
+                effective_lifetime = self.max_tunnel_lifetime
+                matched = next((p for p in self.download_hosts if fnmatch.fnmatch(connect_host, p)), None)
+                if matched:
+                    effective_lifetime = self.max_tunnel_lifetime_download
+                    logger.debug(f"{_rid_prefix()}Matched download host {connect_host} ({matched}), tunnel timeout {effective_lifetime}s")
+
+                try:
+                    if effective_lifetime > 0:
+                        await asyncio.wait_for(
+                            self.tunnel_traffic(reader, writer, remote_writer, remote_reader),
+                            timeout=effective_lifetime,
+                        )
+                    else:
+                        await self.tunnel_traffic(reader, writer, remote_writer, remote_reader)
+                except asyncio.TimeoutError:
+                    logger.info(f"{_rid_prefix()}CONNECT {target} reached max lifetime {effective_lifetime}s, closing tunnel")
+                finally:
+                    try:
+                        remote_writer.close()
+                        await remote_writer.wait_closed()
+                    except Exception:
+                        pass
+                    try:
+                        remote_reader.feed_eof()
+                    except Exception:
+                        pass
+            else:
+                self.stats.connect_failed()
+            self.stats.tunnel_closed()
+            tunnel_elapsed = time.perf_counter() - tunnel_start
+            if tunnel_elapsed > self.slow_request_threshold:
+                logger.warning(f"{_rid_prefix()}CONNECT {target} tunnel ended | {tunnel_elapsed:.1f}s (slow, >{self.slow_request_threshold}s)")
+        finally:
+            self._semaphore.release()
+
     def _tune_socket(self, sock, keepalive=False):
         try:
             sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
@@ -792,8 +824,9 @@ class ProxyServer:
         proxy_url = upstream_https or upstream_http
 
         if not proxy_url:
+            resolved = await self._resolve_host(host)
             remote_reader, remote_writer = await asyncio.wait_for(
-                asyncio.open_connection(host, port), timeout=10
+                asyncio.open_connection(resolved, port), timeout=10
             )
             sock = remote_writer.get_extra_info('socket')
             if sock:
@@ -1028,6 +1061,8 @@ class ProxyServer:
                                     allow_redirects=False,
                                 ) as resp:
                                     await self._write_response(writer, resp)
+                                    if self._upstream_wants_close(resp):
+                                        return False
                     else:
                         # HTTP upstream or direct connection
                         kwargs = dict(headers=forward_headers, data=body if body else None, allow_redirects=False)
@@ -1035,6 +1070,8 @@ class ProxyServer:
                             kwargs['proxy'] = proxy_url  # aiohttp native HTTP proxy
                         async with session.request(method, url, **kwargs) as resp:
                             await self._write_response(writer, resp)
+                            if self._upstream_wants_close(resp):
+                                return False
                     req_elapsed = time.perf_counter() - req_start
                     self.stats.record_http_elapsed(req_elapsed)
                     if req_elapsed > self.slow_request_threshold:
@@ -1145,6 +1182,17 @@ class ProxyServer:
                     await dst_writer.drain()
             except asyncio.TimeoutError:
                 logger.debug(f"Tunnel {name} idle timeout closed")
+            except asyncio.CancelledError:
+                try:
+                    await asyncio.shield(dst_writer.drain())
+                except Exception:
+                    pass
+                try:
+                    dst_writer.close()
+                    await dst_writer.wait_closed()
+                except Exception:
+                    pass
+                raise
             except Exception as e:
                 logger.debug(f"Tunnel {name} forward ended: {e}")
             finally:
