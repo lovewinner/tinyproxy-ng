@@ -7,16 +7,22 @@ A high-performance HTTP/HTTPS proxy server built on Python asyncio + aiohttp wit
 ## Features
 
 - HTTP/HTTPS proxy (CONNECT tunneling)
-- HTTP Basic authentication (Proxy-Authorization)
-- Upstream proxy chaining (HTTP upstream: supported for both forward proxy and CONNECT tunnels; SOCKS5 upstream: forward proxy only, requires aiohttp-socks)
-- Global connection pool reuse + DNS cache + TCP tuning
-- Tunnel idle timeout (180s) + max lifetime (configurable)
-- Auto-extended timeout for download hosts (`download_hosts`)
+- HTTP Basic authentication (htiming-safe via `hmac.compare_digest`)
+- Upstream proxy chaining (HTTP upstream: forward proxy + CONNECT tunnels; SOCKS5 upstream: forward proxy only, requires aiohttp-socks)
+- Happy Eyeballs-style full-address retry for direct CONNECT tunnels
+- Per-IP rate limiting (configurable requests/minute window)
+- Global connection pool reuse + DNS cache (configurable TTL) + TCP tuning
+- CONNECT tunnel: idle timeout (180s) + max lifetime (configurable) + per-address connect timeout
+- Auto-extended lifetime for download hosts (`download_hosts`)
+- Per-write client drain timeout (`drain_timeout`); prevents indefinite backpressure hangs
+- Max request URL length guard (`max_request_line_size`); oversized gets 414
+- Request body size limit (`max_body_size`); oversized gets 413 with clean chunk drain
 - Slow request detection + per-request tracing ID
 - Log rotation (RotatingFileHandler)
-- Built-in stats system (JSON + HTTP endpoint)
+- Built-in stats system (JSON + HTTP endpoint, atomic file writes)
 - Exponential backoff retry + semaphore concurrency control
 - Graceful shutdown (5s wait + force cleanup)
+- Response re-chunk: strips upstream hop-by-hop headers, re-wraps as chunked when Content-Length missing
 - **Live terminal Dashboard** — active connections, tunnels, HTTP requests, bytes, auto-refreshed
 - **Session-only stats** — Dashboard Total↑↓ resets on restart; `stats.json` persists historical totals
 
@@ -171,11 +177,12 @@ Client ──TCP──> asyncio Server ──aiohttp──> Target (HTTP)
                 (handle_client)  ──Tunnel──> Target (HTTPS/CONNECT)
 ```
 
-- **HTTP requests**: The proxy parses the URL, forwards via aiohttp, and streams the response body
-- **CONNECT tunnels**: Creates a bidirectional TCP tunnel with idle timeout + max lifetime protection
-- **Auth**: HTTP Basic authentication; breaks keep-alive loop after 407
-- **Stats**: `StatsCollector` with cumulative counters + sliding window + JSON persistence
-- **Dashboard**: `_active_connections` dict tracks per-connection state; `_active_display` renders periodically
+- **HTTP requests**: Parses URL, forwards via aiohttp with retry + backoff, streams response body; auto re-chunks when upstream omits Content-Length
+- **CONNECT tunnels**: Resolves all addresses, tries each with per-address 10s timeout; bidirectional TCP tunnel with idle timeout + max lifetime + per-address connect timeout
+- **Auth**: HTTP Basic with `hmac.compare_digest`; breaks keep-alive loop after 407
+- **Rate limiting**: Per-IP sliding window (60s), configurable max requests/min; rejects with 429
+- **Stats**: `StatsCollector` with cumulative counters + sliding window + JSON persistence (atomic writes)
+- **Dashboard**: `_active_connections` dict tracks per-connection state; `_active_display` renders periodically; dead connections purged on close
 
 ## License
 

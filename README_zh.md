@@ -7,16 +7,22 @@
 ## Feature
 
 - HTTP/HTTPS 代理（CONNECT 隧道）
-- HTTP Basic 认证（Proxy-Authorization）
+- HTTP Basic 认证（`hmac.compare_digest` 时序安全）
 - 上游代理链（HTTP 上游：转发 + CONNECT 均支持；SOCKS5 上游：仅 HTTP 转发支持，需安装 aiohttp-socks）
-- 全局连接池复用 + DNS 缓存 + TCP 参数调优
-- 隧道闲置超时（180s）+ 最长存活（可配置）
-- 下载主机自动匹配延长超时（download_hosts）
+- Happy Eyeballs 全地址重试（直连 CONNECT 隧道）
+- 每 IP 频率限制（可配置请求/分钟窗口）
+- 全局连接池复用 + DNS 缓存（可配 TTL）+ TCP 参数调优
+- CONNECT 隧道：闲置超时（180s）+ 最长存活 + 每地址连接超时
+- 下载主机自动匹配延长存活时间（`download_hosts`）
+- 客户端 drain 超时保护（`drain_timeout`）；防止慢客户端导致永久挂起
+- 请求 URL 长度限制（`max_request_line_size`）；超长返回 414
+- 请求体大小限制（`max_body_size`）；超限返回 413 并清空剩余 chunk
 - 慢请求检测 + 请求级追踪 ID
 - 日志轮转（RotatingFileHandler）
-- 内置统计系统（JSON + HTTP 端点）
+- 内置统计系统（JSON + HTTP 端点，原子写入）
 - 指数退避重试 + 信号量并发控制
 - 优雅关闭（5s 等待 + 强制清理）
+- 响应重组 chunk：剥离上游 hop-by-hop 头，缺失 Content-Length 时自动重新分块
 - **终端实时 Dashboard**：显示活跃连接、隧道、HTTP 请求、字节量，每 N 秒刷新
 - **会话统计**：Dashboard Total↑↓ 重启归零；`stats.json` 保存历史累计
 
@@ -170,11 +176,12 @@ Client ──TCP──> asyncio Server ──aiohttp──> Target (HTTP)
                 (handle_client)  ──Tunnel──> Target (HTTPS/CONNECT)
 ```
 
-- **HTTP 请求**：代理解析 URL，通过 aiohttp 转发，流式传输响应体
-- **CONNECT 隧道**：建立 TCP 隧道双向透传，支持闲置超时 + 最长存活双层保护
-- **认证**：HTTP Basic，拦截 407 后保活循环退出
-- **统计**：StatsCollector 累计 + 滑动窗口 + JSON 持久化
-- **Dashboard**：`_active_connections` 字典追踪每连接状态，`_active_display` 定时渲染
+- **HTTP 请求**：解析 URL，通过 aiohttp 转发并重试/退避，流式传输响应体；上游缺 Content-Length 时自动重新分块
+- **CONNECT 隧道**：解析全部地址，逐一尝试（每地址 10s 连接超时）；双向 TCP 隧道，闲置超时 + 最长存活 + 每地址连接超时
+- **认证**：HTTP Basic，`hmac.compare_digest` 时序安全比对；拦截 407 后保活循环退出
+- **频率限制**：每 IP 滑动窗口（60s），可配置最大请求数/分钟；超限返回 429
+- **统计**：StatsCollector 累计 + 滑动窗口 + JSON 持久化（原子写入）
+- **Dashboard**：`_active_connections` 字典追踪每连接状态，`_active_display` 定时渲染；连接关闭时自动清理死连接
 
 ## License
 
