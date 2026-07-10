@@ -1121,7 +1121,7 @@ class ProxyServer:
         active_tun = sum(1 for ct in self._active_connections.values() if ct.mode == 'tunnel')
         total_idle = self.stats.total_idle_connections
         # Use session bytes (reset on restart), not total (persistent across restarts)
-        total_str = f"Total↑{_format_bytes(self.stats.session_bytes_sent)} ↓{_format_bytes(self.stats.session_bytes_received)}"
+        total_str = f"Total U {_format_bytes(self.stats.session_bytes_sent)} D {_format_bytes(self.stats.session_bytes_received)}"
 
         W = 120
         sep = '=' * W
