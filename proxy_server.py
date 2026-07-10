@@ -837,14 +837,31 @@ class ProxyServer:
         proxy_url = upstream_https or upstream_http
 
         if not proxy_url:
-            resolved = await self._resolve_host(host)
-            remote_reader, remote_writer = await asyncio.wait_for(
-                asyncio.open_connection(resolved, port), timeout=10
-            )
-            sock = remote_writer.get_extra_info('socket')
-            if sock:
-                self._tune_socket(sock, keepalive=True)
-            return remote_reader, remote_writer
+            loop = asyncio.get_event_loop()
+            infos = await loop.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+            seen = set()
+            last_error = None
+            for info in infos:
+                addr_key = (info[0], info[4][0])
+                if addr_key in seen:
+                    continue
+                seen.add(addr_key)
+                try:
+                    remote_reader, remote_writer = await asyncio.wait_for(
+                        asyncio.open_connection(info[4][0], info[4][1]),
+                        timeout=10
+                    )
+                    sock = remote_writer.get_extra_info('socket')
+                    if sock:
+                        self._tune_socket(sock, keepalive=True)
+                    # Warm DNS cache asynchronously
+                    self._dns_cache[host] = {'time': time.monotonic(), 'addr': info[4][0]}
+                    return remote_reader, remote_writer
+                except asyncio.TimeoutError:
+                    last_error = last_error or asyncio.TimeoutError(f"Timed out after {len(seen)} address(es)")
+                except Exception as e:
+                    last_error = e
+            raise last_error or OSError(f"Cannot connect to {host}:{port}")
 
         if proxy_url.startswith('socks5'):
             raise Exception(
