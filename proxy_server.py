@@ -624,48 +624,52 @@ class ProxyServer:
                         ct.request_count += 1
 
                 if method == 'CONNECT':
+                    await self._semaphore.acquire()
                     self.stats.tunnel_opened()
                     tunnel_start = time.perf_counter()
-                    connect_tunnel = await self.handle_connect(reader, writer, target, headers)
-                    if connect_tunnel is not None:
-                        remote_reader, remote_writer = connect_tunnel
+                    try:
+                        connect_tunnel = await self.handle_connect(reader, writer, target, headers)
+                        if connect_tunnel is not None:
+                            remote_reader, remote_writer = connect_tunnel
 
-                        ct = self._active_connections.get(rid)
-                        if ct:
-                            ct.mode = 'tunnel'
-                            ct.target = target
-                            ct.tunnel_start = time.perf_counter()
+                            ct = self._active_connections.get(rid)
+                            if ct:
+                                ct.mode = 'tunnel'
+                                ct.target = target
+                                ct.tunnel_start = time.perf_counter()
 
-                        connect_host = (target.split(']')[0][1:] if target.startswith('[')
-                                       else target.split(':')[0] if ':' in target
-                                       else target)
-                        effective_lifetime = self.max_tunnel_lifetime
-                        matched = next((p for p in self.download_hosts if fnmatch.fnmatch(connect_host, p)), None)
-                        if matched:
-                            effective_lifetime = self.max_tunnel_lifetime_download
-                            logger.debug(f"{_rid_prefix()}Matched download host {connect_host} ({matched}), tunnel timeout {effective_lifetime}s")
+                            connect_host = (target.split(']')[0][1:] if target.startswith('[')
+                                           else target.split(':')[0] if ':' in target
+                                           else target)
+                            effective_lifetime = self.max_tunnel_lifetime
+                            matched = next((p for p in self.download_hosts if fnmatch.fnmatch(connect_host, p)), None)
+                            if matched:
+                                effective_lifetime = self.max_tunnel_lifetime_download
+                                logger.debug(f"{_rid_prefix()}Matched download host {connect_host} ({matched}), tunnel timeout {effective_lifetime}s")
 
-                        try:
-                            if effective_lifetime > 0:
-                                await asyncio.wait_for(
-                                    self.tunnel_traffic(reader, writer, remote_writer, remote_reader),
-                                    timeout=effective_lifetime,
-                                )
-                            else:
-                                await self.tunnel_traffic(reader, writer, remote_writer, remote_reader)
-                        except asyncio.TimeoutError:
-                            logger.info(f"{_rid_prefix()}CONNECT {target} reached max lifetime {effective_lifetime}s, closing tunnel")
-                        finally:
                             try:
-                                remote_writer.close()
-                            except:
-                                pass
-                    else:
-                        self.stats.connect_failed()
-                    self.stats.tunnel_closed()
-                    tunnel_elapsed = time.perf_counter() - tunnel_start
-                    if tunnel_elapsed > self.slow_request_threshold:
-                        logger.warning(f"{_rid_prefix()}CONNECT {target} tunnel ended | {tunnel_elapsed:.1f}s (slow, >{self.slow_request_threshold}s)")
+                                if effective_lifetime > 0:
+                                    await asyncio.wait_for(
+                                        self.tunnel_traffic(reader, writer, remote_writer, remote_reader),
+                                        timeout=effective_lifetime,
+                                    )
+                                else:
+                                    await self.tunnel_traffic(reader, writer, remote_writer, remote_reader)
+                            except asyncio.TimeoutError:
+                                logger.info(f"{_rid_prefix()}CONNECT {target} reached max lifetime {effective_lifetime}s, closing tunnel")
+                            finally:
+                                try:
+                                    remote_writer.close()
+                                except:
+                                    pass
+                        else:
+                            self.stats.connect_failed()
+                        self.stats.tunnel_closed()
+                        tunnel_elapsed = time.perf_counter() - tunnel_start
+                        if tunnel_elapsed > self.slow_request_threshold:
+                            logger.warning(f"{_rid_prefix()}CONNECT {target} tunnel ended | {tunnel_elapsed:.1f}s (slow, >{self.slow_request_threshold}s)")
+                    finally:
+                        self._semaphore.release()
                     break
 
                 elif method in ('GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS'):
