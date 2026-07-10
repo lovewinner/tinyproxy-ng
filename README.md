@@ -147,7 +147,13 @@ Response includes a `total` section (cumulative across restarts), a `last_period
 
 ```
 proxy-server/
-├── proxy_server.py          # Main program (~1500 LOC)
+├── proxy_server.py          # Entrypoint + server orchestration
+├── config.py                # Config loading and logging setup
+├── stats.py                 # Stats collection and persistence
+├── auth.py                  # Basic proxy authentication
+├── http_forward.py          # HTTP request forwarding
+├── tunnel.py                # CONNECT tunnel handling
+├── dashboard.py             # Live terminal dashboard
 ├── config.example.yaml      # Annotated config template
 ├── requirements.txt
 ├── LICENSE                  # MIT

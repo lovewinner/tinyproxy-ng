@@ -147,7 +147,13 @@ curl -u user:pass http://proxy-stats/
 
 ```
 proxy-server/
-├── proxy_server.py          # 主程序（约1500行）
+├── proxy_server.py          # 入口与服务编排
+├── config.py                # 配置加载与日志设置
+├── stats.py                 # 统计收集与持久化
+├── auth.py                  # Basic 代理认证
+├── http_forward.py          # HTTP 请求转发
+├── tunnel.py                # CONNECT 隧道处理
+├── dashboard.py             # 终端实时面板
 ├── config.example.yaml      # 带注释的配置模板
 ├── requirements.txt
 ├── LICENSE                  # MIT
