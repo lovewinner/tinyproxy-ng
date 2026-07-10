@@ -98,7 +98,7 @@ class AlertHandler(logging.Handler):
         try:
             msg = self.format(record)
             self._target.append((record.created, record.levelname, msg))
-        except:
+        except Exception:
             pass
 
 
@@ -439,6 +439,11 @@ class ProxyServer:
         self.stats_host = config.get('stats_host', 'proxy-stats')
         self.stats = StatsCollector(persist_file=config.get('stats_file', 'stats.json'))
 
+        # Rate limiting per client IP
+        self.rate_limit_enabled = config.get('rate_limit_enabled', False)
+        self.rate_limit_per_minute = config.get('rate_limit_per_minute', 300)
+        self._ip_req_times: Dict[str, collections.deque] = {}
+
         # Dashboard terminal refresh mode
         self.display_interval = config.get('display_interval', 5)
         self._active_connections: Dict[int, _ConnTrack] = {}
@@ -511,6 +516,25 @@ class ProxyServer:
             logger.error(f"Auth parse error: {e}")
             return False, "Auth format error"
 
+    def _check_rate_limit(self, peer_ip: str) -> bool:
+        """Check if peer_ip has exceeded the rate limit. Returns True if allowed."""
+        if not self.rate_limit_enabled:
+            return True
+        now = time.monotonic()
+        window = 60.0
+        times = self._ip_req_times.get(peer_ip)
+        if times is None:
+            self._ip_req_times[peer_ip] = collections.deque(maxlen=self.rate_limit_per_minute)
+            self._ip_req_times[peer_ip].append(now)
+            return True
+        while times and times[0] < now - window:
+            times.popleft()
+        if len(times) >= self.rate_limit_per_minute:
+            logger.warning(f"Rate limit exceeded for {peer_ip}: {len(times)} conns in {window}s window")
+            return False
+        times.append(now)
+        return True
+
     async def _read_headers(self, reader: asyncio.StreamReader) -> Tuple[dict, int]:
         headers = {}
         total_bytes = 0
@@ -541,6 +565,17 @@ class ProxyServer:
             logger.info(f"{_rid_prefix()}New connection: {peer[0]}:{peer[1]}")
         else:
             logger.info(f"{_rid_prefix()}New connection: (unknown address)")
+
+        # Rate limiting check per client IP
+        if peer and not self._check_rate_limit(peer[0]):
+            resp = b'HTTP/1.1 429 Too Many Requests\r\nConnection: close\r\n\r\nRate limit exceeded'
+            self.stats.add_bytes(sent=len(resp))
+            writer.write(resp)
+            await writer.drain()
+            writer.close()
+            self._active_writers.discard(writer)
+            self.stats.conn_closed()
+            return
 
         # Dashboard tracking
         peer_str = f"{peer[0]}:{peer[1]}" if peer else "unknown"
@@ -660,6 +695,11 @@ class ProxyServer:
                             finally:
                                 try:
                                     remote_writer.close()
+                                    await remote_writer.wait_closed()
+                                except:
+                                    pass
+                                try:
+                                    remote_reader.feed_eof()
                                 except:
                                     pass
                         else:
@@ -708,7 +748,7 @@ class ProxyServer:
 
         try:
             writer.close()
-        except:
+        except Exception:
             pass
         self._active_writers.discard(writer)
         self.stats.conn_closed()
@@ -739,9 +779,7 @@ class ProxyServer:
         upstream_http = self.upstream_proxies.get('http')
         proxy_url = upstream_https or upstream_http
 
-        if not proxy_url or proxy_url.startswith('socks5'):
-            if proxy_url and proxy_url.startswith('socks5'):
-                logger.warning("SOCKS5 upstream for CONNECT not supported yet, connecting directly")
+        if not proxy_url:
             remote_reader, remote_writer = await asyncio.wait_for(
                 asyncio.open_connection(host, port), timeout=10
             )
@@ -749,6 +787,12 @@ class ProxyServer:
             if sock:
                 self._tune_socket(sock, keepalive=True)
             return remote_reader, remote_writer
+
+        if proxy_url.startswith('socks5'):
+            raise Exception(
+                "SOCKS5 upstream for CONNECT tunnels is not supported. "
+                "Use an HTTP/HTTPS upstream proxy or remove upstream_proxies to connect directly."
+            )
 
         parsed = urlparse(proxy_url)
         proxy_host = parsed.hostname
@@ -1333,15 +1377,16 @@ def main():
 
     # Configure log rotation
     log_file = config.get('log_file', '')
+    file_handler = None
     if log_file:
-        handler = RotatingFileHandler(
+        file_handler = RotatingFileHandler(
             log_file,
             maxBytes=config.get('log_max_size', 10 * 1024 * 1024),
             backupCount=config.get('log_backup_count', 5),
             encoding='utf-8'
         )
-        handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
-        logging.getLogger().addHandler(handler)
+        file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+        logging.getLogger().addHandler(file_handler)
         logger.info(f"Log file: {log_file}")
 
     # Set log level
@@ -1361,6 +1406,12 @@ def main():
         logger.error(f"Server start failed: {e}")
         sys.exit(1)
     finally:
+        if file_handler:
+            try:
+                logging.getLogger().removeHandler(file_handler)
+                file_handler.close()
+            except Exception:
+                pass
         gc.collect()
 
 
