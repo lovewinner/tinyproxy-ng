@@ -21,7 +21,7 @@ import aiohttp
 
 
 # Default test target
-DEFAULT_TEST_URL = "https://www.163.com"
+DEFAULT_TEST_URL = "http://127.0.0.1:8000/"
 
 # Percentile configuration
 PERCENTILES = [50, 75, 90, 95, 99]

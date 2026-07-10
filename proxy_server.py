@@ -31,6 +31,27 @@ logger = logging.getLogger(__name__)
 _request_id = contextvars.ContextVar('request_id', default=0)
 
 
+class Headers(dict):
+    """HTTP headers with case-insensitive lookup and original-case iteration."""
+
+    def __init__(self):
+        super().__init__()
+        self._lookup = {}
+
+    def __setitem__(self, key, value):
+        self._lookup[key.lower()] = key
+        super().__setitem__(key, value)
+
+    def get(self, key, default=None):
+        actual = self._lookup.get(key.lower())
+        if actual is None:
+            return default
+        return super().get(actual, default)
+
+    def __contains__(self, key):
+        return key.lower() in self._lookup
+
+
 class ProxyServer:
     """HTTP/HTTPS Proxy Server core class."""
 
@@ -167,7 +188,7 @@ class ProxyServer:
             raise
 
     async def _read_headers(self, reader: asyncio.StreamReader) -> Tuple[dict, int]:
-        headers = {}
+        headers = Headers()
         total_bytes = 0
         while True:
             line = await reader.readline()
@@ -175,8 +196,9 @@ class ProxyServer:
             if not line or line == b'\r\n':
                 break
             try:
-                key, value = line.decode('utf-8').strip().split(': ', 1)
-                headers[key] = value
+                decoded = line.decode('utf-8').strip()
+                key, value = decoded.split(':', 1)
+                headers[key.strip()] = value.strip()
                 logger.debug(f"Header: {key}: {value}")
             except ValueError:
                 continue

@@ -75,7 +75,7 @@ async def handle_http_request(server, reader: asyncio.StreamReader, writer: asyn
                     size_line = size_line.strip()
                     if not size_line:
                         continue
-                    chunk_size = int(size_line, 16)
+                    chunk_size = int(size_line.split(b';', 1)[0], 16)
                     if chunk_size == 0:
                         await reader.readline()
                         break
@@ -90,7 +90,7 @@ async def handle_http_request(server, reader: asyncio.StreamReader, writer: asyn
                                 size_line = await reader.readline()
                                 if not size_line:
                                     break
-                                chunk_size = int(size_line.strip(), 16)
+                                chunk_size = int(size_line.strip().split(b';', 1)[0], 16)
                                 if chunk_size == 0:
                                     await reader.readline()
                                     break
@@ -99,6 +99,9 @@ async def handle_http_request(server, reader: asyncio.StreamReader, writer: asyn
                         return False
                     body += await reader.readexactly(chunk_size)
                     server.stats.add_bytes(sent=chunk_size)
+                    ct_body = server._active_connections.get(server.current_rid())
+                    if ct_body:
+                        ct_body.bytes_sent += chunk_size
                     await reader.readline()
 
         # Parse full URL
@@ -126,6 +129,8 @@ async def handle_http_request(server, reader: asyncio.StreamReader, writer: asyn
         # Filter forward headers: remove proxy-specific and hop-by-hop headers
         forward_headers = {}
         skip_headers = ['proxy-connection', 'proxy-authorization', 'connection', 'host']
+        if body:
+            skip_headers.append('transfer-encoding')
         for k, v in headers.items():
             if k.lower() not in skip_headers:
                 forward_headers[k] = v
@@ -152,39 +157,37 @@ async def handle_http_request(server, reader: asyncio.StreamReader, writer: asyn
                     if not AIOHTTP_SOCKS_AVAILABLE:
                         raise Exception("aiohttp-socks not installed, cannot use SOCKS5 upstream")
 
-                    if attempt == 0:
-                        # First attempt: via SOCKS5 proxy
-                        parsed = urlparse(proxy_url)
-                        proxy_host = parsed.hostname
-                        proxy_port = parsed.port or 1080
-                        kwargs = dict(
-                            proxy_type=ProxyType.SOCKS5,
-                            host=proxy_host,
-                            port=proxy_port,
-                            rdns=True  # Remote DNS resolution
-                        )
-                        if parsed.username and parsed.password:
-                            kwargs['username'] = parsed.username
-                            kwargs['password'] = parsed.password
-                        connector = ProxyConnector(**kwargs)
-                        # SOCKS5 needs its own ClientSession
-                        async with aiohttp.ClientSession(connector=connector) as socks_session:
-                            async with socks_session.request(
-                                method, url,
-                                headers=forward_headers,
-                                data=body if body else None,
-                                allow_redirects=False,
-                            ) as resp:
-                                await asyncio.wait_for(
-                                    write_response(server, writer, resp),
-                                    timeout=server.drain_timeout * 4,
-                                )
-                                if upstream_wants_close(resp):
-                                    return False
+                    parsed = urlparse(proxy_url)
+                    proxy_host = parsed.hostname
+                    proxy_port = parsed.port or 1080
+                    kwargs = dict(
+                        proxy_type=ProxyType.SOCKS5,
+                        host=proxy_host,
+                        port=proxy_port,
+                        rdns=True  # Remote DNS resolution
+                    )
+                    if parsed.username and parsed.password:
+                        kwargs['username'] = parsed.username
+                        kwargs['password'] = parsed.password
+                    connector = ProxyConnector(**kwargs)
+                    # SOCKS5 needs its own ClientSession
+                    async with aiohttp.ClientSession(connector=connector) as socks_session:
+                        async with socks_session.request(
+                            method, url,
+                            headers=forward_headers,
+                            data=body if body else None,
+                            allow_redirects=False,
+                        ) as resp:
+                            await asyncio.wait_for(
+                                write_response(server, writer, resp),
+                                timeout=server.drain_timeout * 4,
+                            )
+                            if upstream_wants_close(resp):
+                                return False
                 else:
                     # HTTP upstream or direct connection
                     kwargs = dict(headers=forward_headers, data=body if body else None, allow_redirects=False)
-                    if proxy_url and attempt == 0:
+                    if proxy_url:
                         kwargs['proxy'] = proxy_url  # aiohttp native HTTP proxy
                     async with session.request(method, url, **kwargs) as resp:
                         await asyncio.wait_for(

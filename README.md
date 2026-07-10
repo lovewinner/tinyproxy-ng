@@ -2,7 +2,7 @@
 
 > **[中文文档](README_zh.md)** | **English**
 
-A lightweight Python asyncio HTTP/HTTPS proxy server with authentication, CONNECT tunneling, upstream proxy chaining, rate limiting, and a live terminal dashboard.  Single-file ~1500 LOC, pip-install only two dependencies.
+A lightweight Python asyncio HTTP/HTTPS proxy server with authentication, CONNECT tunneling, upstream proxy chaining, rate limiting, and a live terminal dashboard. Modular implementation with a small dependency set.
 
 ---
 
@@ -65,6 +65,12 @@ python proxy_server.py --host 127.0.0.1 --port 8888 --user admin --passwd secret
 | `--passwd` | Auth password |
 | `--no-auth` | Disable authentication |
 | `--debug` | Enable DEBUG logging |
+
+### Test
+
+```bash
+python -m pytest
+```
 
 ### Client Setup
 

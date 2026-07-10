@@ -2,7 +2,7 @@
 
 > **中文** | [English](README.md)
 
-轻量 Python asyncio HTTP/HTTPS 代理服务器，支持认证、CONNECT 隧道、上游代理链、速率限制和实时终端面板。单文件约 1500 行，pip 仅需两个依赖。
+轻量 Python asyncio HTTP/HTTPS 代理服务器，支持认证、CONNECT 隧道、上游代理链、速率限制和实时终端面板。模块化实现，依赖保持精简。
 
 ---
 
@@ -65,6 +65,12 @@ python proxy_server.py --host 127.0.0.1 --port 8888 --user admin --passwd secret
 | `--passwd` | 认证密码 |
 | `--no-auth` | 禁用认证 |
 | `--debug` | 启用 DEBUG 日志 |
+
+### 测试
+
+```bash
+python -m pytest
+```
 
 ### 客户端设置
 
