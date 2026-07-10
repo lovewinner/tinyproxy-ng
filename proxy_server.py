@@ -370,8 +370,12 @@ class StatsCollector:
         data = {"started_at": self.started_at}
         data.update({k: getattr(self, k) for k in self._PERSIST_FIELDS})
         try:
-            with open(self.persist_file, "w", encoding="utf-8") as f:
+            tmp_file = self.persist_file + ".tmp"
+            with open(tmp_file, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_file, self.persist_file)
         except Exception as e:
             logger.debug(f"Stats save failed: {e}")
 
@@ -573,6 +577,10 @@ class ProxyServer:
             writer.write(resp)
             await writer.drain()
             writer.close()
+            try:
+                await writer.wait_closed()
+            except Exception:
+                pass
             self._active_writers.discard(writer)
             self.stats.conn_closed()
             return
@@ -696,11 +704,11 @@ class ProxyServer:
                                 try:
                                     remote_writer.close()
                                     await remote_writer.wait_closed()
-                                except:
+                                except Exception:
                                     pass
                                 try:
                                     remote_reader.feed_eof()
-                                except:
+                                except Exception:
                                     pass
                         else:
                             self.stats.connect_failed()
@@ -748,6 +756,10 @@ class ProxyServer:
 
         try:
             writer.close()
+            try:
+                await writer.wait_closed()
+            except Exception:
+                pass
         except Exception:
             pass
         self._active_writers.discard(writer)
@@ -820,6 +832,10 @@ class ProxyServer:
         self.stats.add_bytes(received=len(response))
         if not response.startswith(b'HTTP/1.1 200'):
             remote_writer.close()
+            try:
+                await remote_writer.wait_closed()
+            except Exception:
+                pass
             raise Exception(f"Upstream proxy CONNECT failed: {response.decode().strip()}")
 
         # Read and discard remaining response headers (with timeout, prevent upstream hang)
@@ -881,7 +897,7 @@ class ProxyServer:
                 self.stats.add_bytes(sent=len(resp))
                 writer.write(resp)
                 await writer.drain()
-            except:
+            except Exception:
                 pass
             return None
 
@@ -922,6 +938,23 @@ class ProxyServer:
                             self.stats.add_bytes(sent=len(b'HTTP/1.1 413 Payload Too Large\r\nConnection: close\r\n\r\n'))
                             writer.write(b'HTTP/1.1 413 Payload Too Large\r\nConnection: close\r\n\r\n')
                             await writer.drain()
+                            # Drain remaining chunk data to keep reader in sync
+                            while True:
+                                try:
+                                    leftover = await reader.readexactly(chunk_size)
+                                    await reader.readline()
+                                except Exception:
+                                    break
+                                chunk_size_line = await reader.readline()
+                                if not chunk_size_line:
+                                    break
+                                try:
+                                    chunk_size = int(chunk_size_line.strip(), 16)
+                                except (ValueError, AttributeError):
+                                    break
+                                if chunk_size == 0:
+                                    await reader.readline()
+                                    break
                             return False
                         body += await reader.readexactly(chunk_size)
                         self.stats.add_bytes(sent=chunk_size)
@@ -995,15 +1028,6 @@ class ProxyServer:
                                     allow_redirects=False,
                                 ) as resp:
                                     await self._write_response(writer, resp)
-                        else:
-                            # Retry: fallback to direct connection (bypass problematic upstream)
-                            async with session.request(
-                                method, url,
-                                headers=forward_headers,
-                                data=body if body else None,
-                                allow_redirects=False,
-                            ) as resp:
-                                await self._write_response(writer, resp)
                     else:
                         # HTTP upstream or direct connection
                         kwargs = dict(headers=forward_headers, data=body if body else None, allow_redirects=False)
@@ -1036,7 +1060,7 @@ class ProxyServer:
             try:
                 writer.write(b'HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n')
                 await writer.drain()
-            except:
+            except Exception:
                 pass
             return False
         except asyncio.TimeoutError:
@@ -1046,7 +1070,7 @@ class ProxyServer:
             try:
                 writer.write(b'HTTP/1.1 504 Gateway Timeout\r\nConnection: close\r\n\r\n')
                 await writer.drain()
-            except:
+            except Exception:
                 pass
             return False
         except Exception as e:
@@ -1056,30 +1080,41 @@ class ProxyServer:
             return False
 
     async def _write_response(self, writer: asyncio.StreamWriter, resp: aiohttp.ClientResponse):
-        # Use ContextVar to get the correct RID for this task (per-task isolated)
         rid = _request_id.get()
+        has_content_length = False
         try:
-            # Write status line
             writer.write(f'HTTP/1.1 {resp.status} {resp.reason}\r\n'.encode('utf-8'))
-            # Write response headers (filter out hop-by-hop headers)
+            writer.write(b'Via: 1.1 tinyproxy-ng\r\n')
             for key, value in resp.headers.items():
-                if key.lower() not in ['transfer-encoding', 'connection', 'content-encoding',
-                                        'keep-alive', 'proxy-authenticate', 'proxy-connection',
-                                        'upgrade', 'trailer']:
+                kl = key.lower()
+                if kl not in ['transfer-encoding', 'connection', 'content-encoding',
+                              'keep-alive', 'proxy-authenticate', 'proxy-connection',
+                              'upgrade', 'trailer']:
                     writer.write(f'{key}: {value}\r\n'.encode('utf-8'))
+                    if kl == 'content-length':
+                        has_content_length = True
+            if not has_content_length:
+                writer.write(b'Transfer-Encoding: chunked\r\n')
             writer.write(b'\r\n')
-            # Stream response body in chunks; track DOWN bytes for this connection
             async for chunk in resp.content.iter_chunked(self.io_buffer_size):
                 self.stats.add_bytes(received=len(chunk))
                 ct = self._active_connections.get(rid)
                 if ct:
                     ct.bytes_received += len(chunk)
-                writer.write(chunk)
+                if not has_content_length:
+                    writer.write(f'{len(chunk):x}\r\n'.encode() + chunk + b'\r\n')
+                else:
+                    writer.write(chunk)
+                await writer.drain()
+            if not has_content_length:
+                writer.write(b'0\r\n\r\n')
                 await writer.drain()
         except (ConnectionResetError, BrokenPipeError):
             logger.debug("Client disconnected during response transfer")
+            raise Exception("Response write aborted: client disconnected")
         except Exception as e:
             logger.debug(f"Response write error: {e}")
+            raise Exception(f"Response write aborted: {e}")
 
     async def tunnel_traffic(self, client_reader: asyncio.StreamReader, client_writer: asyncio.StreamWriter,
                             remote_writer: asyncio.StreamWriter, remote_reader: asyncio.StreamReader):
@@ -1115,7 +1150,8 @@ class ProxyServer:
             finally:
                 try:
                     dst_writer.close()
-                except:
+                    await dst_writer.wait_closed()
+                except Exception:
                     pass
 
         # Create bidirectional forwarding tasks
@@ -1136,11 +1172,13 @@ class ProxyServer:
             # Ensure all connections are closed
             try:
                 remote_writer.close()
-            except:
+                await remote_writer.wait_closed()
+            except Exception:
                 pass
             try:
                 client_writer.close()
-            except:
+                await client_writer.wait_closed()
+            except Exception:
                 pass
         self.stats.record_tunnel_duration(time.perf_counter() - tunnel_start)
 
@@ -1157,7 +1195,7 @@ class ProxyServer:
         """Render the live Dashboard (pure ASCII, no CJK width issues)"""
         if os.name == 'nt':
             os.system('cls')
-        else:
+        elif sys.stdout.isatty():
             sys.stdout.write('\033[2J\033[H')
             sys.stdout.flush()
         now = time.perf_counter()
@@ -1293,7 +1331,7 @@ class ProxyServer:
                     for w in list(self._active_writers):
                         try:
                             w.close()
-                        except:
+                        except Exception:
                             pass
             # Clean up connection pool
             await self.close_session()
