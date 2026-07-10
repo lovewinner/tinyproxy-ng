@@ -39,7 +39,7 @@ cp config.example.yaml config.yaml
 python proxy_server.py
 ```
 
-Browser setup: HTTP proxy → server IP → port (default 26128) → enable authentication.
+Browser setup: HTTP proxy → server IP → port (default 8080) → enable authentication.
 
 ## CLI
 
@@ -72,8 +72,8 @@ See `config.example.yaml` for the full configuration. Key parameters:
 | `max_tunnel_lifetime_download` | 7200s | Extended tunnel timeout for downloads |
 | `download_hosts` | `*.github.com` etc. | Auto-match download hosts |
 | `slow_request_threshold` | 5.0s | Slow request warning threshold |
-| `stats_interval` | 3600s | Stats log/snapshot interval |
-| `display_interval` | 2s | Dashboard refresh interval (0 = traditional log mode) |
+| `stats_interval` | 60s | Stats log/snapshot interval |
+| `display_interval` | 5s | Dashboard refresh interval (0 = traditional log mode) |
 
 ## Dashboard
 
@@ -81,7 +81,7 @@ When `display_interval > 0`, the terminal enters live Dashboard mode and refresh
 
 ```
 +========================================================================================================================+
-| Proxy 0.0.0.0:26128  |  Active:18  TUN:9  DONE:5  UP:3h49m  |  Total↑2.1 MB ↓88.6 MB                                 |
+| Proxy 0.0.0.0:8080  |  Active:18  TUN:9  DONE:5  UP:3h49m  |  Total U 2.1 MB D 88.6 MB                                  |
 +========================================================================================================================+
 | 192.168.1.100   TUN 36m51s       UP:  4.7 KB  DOWN:  4.4 KB                                                            |
 | 192.168.1.100   TUN 12m46s       UP:  3.5 KB  DOWN:  5.5 KB                                                            |
@@ -110,7 +110,7 @@ Header fields:
 
 ## Stats
 
-Stats are logged every `stats_interval` (default 3600s) and saved to `stats.json` (persisted across restarts). Accessible via HTTP (requires auth):
+Stats are logged every `stats_interval` (default 60s) and saved to `stats.json` (persisted across restarts). Accessible via HTTP (requires auth):
 
 ```
 curl -u user:pass http://proxy-stats/

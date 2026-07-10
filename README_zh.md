@@ -39,7 +39,7 @@ cp config.example.yaml config.yaml
 python proxy_server.py
 ```
 
-浏览器配置：HTTP 代理 → 服务器 IP → 端口（默认 26128）→ 启用认证。
+浏览器配置：HTTP 代理 → 服务器 IP → 端口（默认 8080）→ 启用认证。
 
 ## CLI
 
@@ -63,7 +63,7 @@ python proxy_server.py --host 127.0.0.1 --port 8888 --user admin --passwd secret
 
 | 参数 | 默认 | 说明 |
 |------|------|------|
-| `port` | 26128 | 监听端口 |
+| `port` | 8080 | 监听端口 |
 | `auth_enabled` | true | 启用 Basic 认证 |
 | `max_connections` | 500 | 最大并发连接数 |
 | `max_body_size` | 10MB | 请求体上限 |
@@ -72,8 +72,8 @@ python proxy_server.py --host 127.0.0.1 --port 8888 --user admin --passwd secret
 | `max_tunnel_lifetime_download` | 7200s | 下载隧道超时 |
 | `download_hosts` | `*.github.com` 等 | 自动匹配下载主机 |
 | `slow_request_threshold` | 5.0s | 慢请求告警阈值 |
-| `stats_interval` | 3600s | 统计日志/快照间隔 |
-| `display_interval` | 2s | 终端 Dashboard 刷新间隔（0=传统日志） |
+| `stats_interval` | 60s | 统计日志/快照间隔 |
+| `display_interval` | 5s | 终端 Dashboard 刷新间隔（0=传统日志） |
 
 ## Dashboard
 
@@ -81,7 +81,7 @@ python proxy_server.py --host 127.0.0.1 --port 8888 --user admin --passwd secret
 
 ```
 +========================================================================================================================+
-| Proxy 0.0.0.0:26128  |  Active:18  TUN:9  DONE:5  UP:3h49m  |  Total↑2.1 MB ↓88.6 MB                                 |
+| Proxy 0.0.0.0:8080  |  Active:18  TUN:9  DONE:5  UP:3h49m  |  Total U 2.1 MB D 88.6 MB                                 |
 +========================================================================================================================+
 | 192.168.1.100   TUN 36m51s       UP:  4.7 KB  DOWN:  4.4 KB                                                            |
 | 192.168.1.100   TUN 12m46s       UP:  3.5 KB  DOWN:  5.5 KB                                                            |
@@ -110,7 +110,7 @@ python proxy_server.py --host 127.0.0.1 --port 8888 --user admin --passwd secret
 
 ## Stats
 
-统计信息每 `stats_interval`（默认 3600s）输出到日志并保存到 `stats.json`（持久化跨重启）。可通过 HTTP 访问（需认证）：
+统计信息每 `stats_interval`（默认 60s）输出到日志并保存到 `stats.json`（持久化跨重启）。可通过 HTTP 访问（需认证）：
 
 ```
 curl -u user:pass http://proxy-stats/

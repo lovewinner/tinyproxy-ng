@@ -137,7 +137,7 @@ class StatsCollector:
         self.total_timeout_errors = 0
         self.total_http_failed = 0
         self.total_connect_failed = 0
-        self.total_idle_connections = 0
+        self.total_disconnected = 0
         self.session_bytes_sent = 0
         self.session_bytes_received = 0
         self._total_http_elapsed = 0.0
@@ -711,7 +711,7 @@ class ProxyServer:
         # Remove from dashboard tracking; count idle connections for stats
         ct = self._active_connections.pop(rid, None)
         if ct:
-            self.stats.total_idle_connections += 1
+            self.stats.total_disconnected += 1
 
     def _tune_socket(self, sock, keepalive=False):
         try:
@@ -1119,7 +1119,7 @@ class ProxyServer:
         uptime_str = f"{h}h{m:02d}m" if h else f"{m}m{s:02d}s"
         active_conn = len(self._active_connections)
         active_tun = sum(1 for ct in self._active_connections.values() if ct.mode == 'tunnel')
-        total_idle = self.stats.total_idle_connections
+        total_idle = self.stats.total_disconnected
         # Use session bytes (reset on restart), not total (persistent across restarts)
         total_str = f"Total U {_format_bytes(self.stats.session_bytes_sent)} D {_format_bytes(self.stats.session_bytes_received)}"
 
