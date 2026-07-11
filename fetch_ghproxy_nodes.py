@@ -156,18 +156,19 @@ async def main():
             nodes = await speed_test_nodes(nodes, limit=limit)
             ok = sum(1 for n in nodes if n["latency_ms"] is not None)
             print(f"  Reachable: {ok}/{len(nodes)}")
+            nodes.sort(key=lambda n: (n["latency_ms"] is None, n["latency_ms"] or 0))
         else:
             print("  Speed test skipped (--speed-test 0)")
 
         data = {
-        "fetched_at": fetched_at,
-        "source_url": args.source,
-        "nodes": nodes,
-    }
+            "fetched_at": fetched_at,
+            "source_url": args.source,
+            "nodes": nodes,
+        }
 
-    with open(args.output, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-    print(f"Saved {len(nodes)} nodes to {args.output}")
+        with open(args.output, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        print(f"Saved {len(nodes)} nodes to {args.output}")
 
 
 if __name__ == "__main__":
