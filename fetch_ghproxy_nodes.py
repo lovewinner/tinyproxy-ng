@@ -104,8 +104,6 @@ async def main():
 
 if __name__ == "__main__":
     import asyncio
-    try:
-        asyncio.run(main())
-    finally:
-        import gc
-        gc.collect()
+    if sys.version_info >= (3, 8) and sys.platform == "win32":
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    asyncio.run(main())
