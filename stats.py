@@ -65,7 +65,7 @@ class StatsCollector:
         self._period_tunnel_count = 0
 
         # ── Last period snapshot ──
-        self.last_period = {}
+        self.last_period: dict[str, object] = {}
 
         # ── Live ──
         self.active_connections = 0
@@ -258,7 +258,7 @@ class StatsCollector:
     def _load(self):
         if os.path.exists(self.persist_file):
             try:
-                with open(self.persist_file, "r", encoding="utf-8") as f:
+                with open(self.persist_file, encoding="utf-8") as f:
                     data = json.load(f)
                 self.started_at = data.get("started_at", self.started_at)
                 for k in self._PERSIST_FIELDS:

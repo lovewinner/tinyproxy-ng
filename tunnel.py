@@ -1,9 +1,10 @@
+from __future__ import annotations
+
 import asyncio
 import fnmatch
 import logging
 import socket
 import time
-from typing import Optional, Tuple
 from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
@@ -58,7 +59,7 @@ async def handle_connect_client(server, reader: asyncio.StreamReader, writer: as
     finally:
         server._semaphore.release()
 
-def tune_socket(server, sock, keepalive=False):
+def tune_socket(server, sock: socket.socket, keepalive: bool = False) -> None:
     try:
         sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, server.socket_sndbuf)
@@ -74,7 +75,7 @@ def tune_socket(server, sock, keepalive=False):
     except Exception:
         pass
 
-async def connect_upstream(server, host: str, port: int) -> Tuple[asyncio.StreamReader, asyncio.StreamWriter]:
+async def connect_upstream(server, host: str, port: int) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
     # Select upstream: prefer https upstream for HTTPS requests, fallback to http
     upstream_https = server.upstream_proxies.get('https')
     upstream_http = server.upstream_proxies.get('http')
@@ -84,7 +85,7 @@ async def connect_upstream(server, host: str, port: int) -> Tuple[asyncio.Stream
         loop = asyncio.get_event_loop()
         infos = await loop.getaddrinfo(host, port, type=socket.SOCK_STREAM)
         seen = set()
-        last_error = None
+        last_error: Exception | None = None
         for info in infos:
             addr_key = (info[0], info[4][0])
             if addr_key in seen:
@@ -155,7 +156,7 @@ async def connect_upstream(server, host: str, port: int) -> Tuple[asyncio.Stream
     return remote_reader, remote_writer
 
 async def handle_connect(server, reader: asyncio.StreamReader, writer: asyncio.StreamWriter,
-                     target: str, headers: dict) -> Optional[Tuple[asyncio.StreamReader, asyncio.StreamWriter]]:
+                      target: str, headers: dict[str, str]) -> tuple[asyncio.StreamReader, asyncio.StreamWriter] | None:
     try:
         # Parse target address (supports IPv6: [::1]:443)
         if target.startswith('['):
@@ -209,17 +210,16 @@ async def handle_connect(server, reader: asyncio.StreamReader, writer: asyncio.S
         return None
 
 async def tunnel_traffic(server, client_reader: asyncio.StreamReader, client_writer: asyncio.StreamWriter,
-                     remote_writer: asyncio.StreamWriter, remote_reader: asyncio.StreamReader):
-    # Tunnel idle timeout in seconds
-    TUNNEL_IDLE_TIMEOUT = server.tunnel_idle_timeout
+                      remote_writer: asyncio.StreamWriter, remote_reader: asyncio.StreamReader) -> None:
+    tunnel_idle_timeout = server.tunnel_idle_timeout
     tunnel_start = time.perf_counter()
 
-    async def forward(src_reader: asyncio.StreamReader, dst_writer: asyncio.StreamWriter, name: str):
+    async def forward(src_reader: asyncio.StreamReader, dst_writer: asyncio.StreamWriter, name: str) -> None:
         # ContextVar returns the per-task RID (isolated from other concurrent tasks)
         rid = server.current_rid()
         try:
             while True:
-                data = await asyncio.wait_for(src_reader.read(server.io_buffer_size), timeout=TUNNEL_IDLE_TIMEOUT)
+                data = await asyncio.wait_for(src_reader.read(server.io_buffer_size), timeout=tunnel_idle_timeout)
                 if not data:
                     break
                 if name.startswith("client"):

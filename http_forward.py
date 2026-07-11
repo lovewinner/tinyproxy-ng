@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import asyncio
 import logging
 import time
@@ -35,14 +37,14 @@ async def get_session(server) -> aiohttp.ClientSession:
                 connector=connector,
                 timeout=timeout,
             )
-    return server._session
+    return server._session  # type: ignore[no-any-return]
 
 async def close_session(server):
     """Close global HTTP client session (clean up connection pool)"""
     if server._session and not server._session.closed:
         await server._session.close()
 
-def upstream_wants_close(resp) -> bool:
+def upstream_wants_close(resp: aiohttp.ClientResponse) -> bool:
     conn_header = resp.headers.get('Connection', '').lower()
     return any(p.strip() == 'close' for p in conn_header.split(','))
 
@@ -149,7 +151,7 @@ async def handle_http_request(server, reader: asyncio.StreamReader, writer: asyn
 
         # Exponential backoff retry: transient failures (e.g. DNS timeout) auto-retry once
         max_retries = 1
-        last_error = None
+        last_error: BaseException | None = None
         for attempt in range(max_retries + 1):
             try:
                 if proxy_url and proxy_url.startswith('socks5'):
@@ -212,6 +214,7 @@ async def handle_http_request(server, reader: asyncio.StreamReader, writer: asyn
                     await asyncio.sleep(wait)
 
         # All retries failed
+        assert last_error is not None
         raise last_error
 
     except aiohttp.ClientError as e:
@@ -227,7 +230,7 @@ async def handle_http_request(server, reader: asyncio.StreamReader, writer: asyn
     except asyncio.TimeoutError:
         server.stats.http_failed()
         server.stats.timeout_error()
-        logger.error(f"HTTP forward timeout")
+        logger.error("HTTP forward timeout")
         try:
             writer.write(b'HTTP/1.1 504 Gateway Timeout\r\nConnection: close\r\n\r\n')
             await server._safe_drain(writer)
@@ -244,14 +247,14 @@ async def write_response(server, writer: asyncio.StreamWriter, resp: aiohttp.Cli
     rid = server.current_rid()
     has_content_length = False
     try:
-        writer.write(f'HTTP/1.1 {resp.status} {resp.reason or ""}\r\n'.encode('utf-8'))
+        writer.write(f'HTTP/1.1 {resp.status} {resp.reason or ""}\r\n'.encode())
         writer.write(b'Via: 1.1 tinyproxy-ng\r\n')
         for key, value in resp.headers.items():
             kl = key.lower()
             if kl not in ['transfer-encoding', 'connection', 'content-encoding',
                           'keep-alive', 'proxy-authenticate', 'proxy-connection',
                           'upgrade', 'trailer']:
-                writer.write(f'{key}: {value}\r\n'.encode('utf-8'))
+                writer.write(f'{key}: {value}\r\n'.encode())
                 if kl == 'content-length':
                     has_content_length = True
         if not has_content_length:
@@ -272,7 +275,7 @@ async def write_response(server, writer: asyncio.StreamWriter, resp: aiohttp.Cli
             await server._safe_drain(writer)
     except (ConnectionResetError, BrokenPipeError):
         logger.debug("Client disconnected during response transfer")
-        raise Exception("Response write aborted: client disconnected")
+        raise Exception("Response write aborted: client disconnected") from None
     except Exception as e:
         logger.debug(f"Response write error: {e}")
-        raise Exception(f"Response write aborted: {e}")
+        raise Exception(f"Response write aborted: {e}") from e
