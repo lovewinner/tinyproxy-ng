@@ -6,6 +6,7 @@ Uses aiohttp, supports steady and ramp modes.
 Outputs throughput, success rate, response time percentiles, etc.
 """
 
+import argparse
 import asyncio
 import base64
 import gc
@@ -13,12 +14,8 @@ import math
 import os
 import sys
 import time
-import argparse
-from typing import Optional
-from urllib.parse import urlparse
 
 import aiohttp
-
 
 # Default test target
 DEFAULT_TEST_URL = "http://127.0.0.1:8000/"
@@ -107,7 +104,7 @@ class StressTester:
             rps = total / elapsed if elapsed > 0 else 0
             interval_count = total - last_total
             interval_rps = interval_count / 5
-            active = self.concurrency - (interval_count if interval_count < self.concurrency else 0)
+            self.concurrency - (interval_count if interval_count < self.concurrency else 0)
             print(f"  [{elapsed:4.0f}s]  Done {total}, "
                   f"RPS={rps:.1f},  Window RPS={interval_rps:.1f},  Active={self.concurrency}")
             last_total = total
@@ -199,7 +196,7 @@ class StressTester:
         s = stats
         print()
         print(f"{'─' * 68}")
-        print(f"  Stress Test Report")
+        print("  Stress Test Report")
         print(f"{'─' * 68}")
         print(f"  {'Metric':<20} {'Total':>10} {'p50':>8} {'p75':>8} {'p90':>8} {'p95':>8} {'p99':>8}")
         print(f"{' ' * 4}{'─' * 64}")
@@ -212,7 +209,7 @@ class StressTester:
         cp = s["connect"]
         print(f"  {'Connect (ms)':<20} {'':>10} {cp.get(50, 0):>7.1f} {cp.get(75, 0):>7.1f} {cp.get(90, 0):>7.1f} {cp.get(95, 0):>7.1f} {cp.get(99, 0):>7.1f}")
         print(f"{'─' * 68}")
-        print(f"  Error Breakdown:")
+        print("  Error Breakdown:")
         print(f"    Timeout:      {s['errors']['timeout']}")
         print(f"    Refused:      {s['errors']['refused']}")
         print(f"    Status:       {s['errors']['status']}")
@@ -224,7 +221,7 @@ class StressTester:
         """Print ramp mode report"""
         print()
         print(f"{'─' * 68}")
-        print(f"  Ramp Stress Test Report")
+        print("  Ramp Stress Test Report")
         print(f"{'─' * 68}")
         header = f"  {'Concur':>6} {'Total':>8} {'Success':>8} {'RPS':>8} {'p50(ms)':>8} {'p95(ms)':>8} {'p99(ms)':>8}"
         print(header)
@@ -243,7 +240,7 @@ def load_config() -> dict:
     config = {}
     if os.path.exists(config_file):
         try:
-            with open(config_file, "r", encoding="utf-8") as f:
+            with open(config_file, encoding="utf-8") as f:
                 config = yaml.safe_load(f) or {}
         except Exception:
             pass
@@ -269,7 +266,7 @@ def main():
     passwd = args.passwd or cfg.get("password", "")
 
     print(f"{'=' * 60}")
-    print(f"  Proxy Stress Test")
+    print("  Proxy Stress Test")
     print(f"{'=' * 60}")
     print(f"  Target:     {host}:{port}")
     print(f"  Auth:       {'Enabled' if user else 'Disabled'}")

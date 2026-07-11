@@ -1,21 +1,23 @@
+from __future__ import annotations
+
 import asyncio
 import base64
 import contextlib
 import socket
 
+from aiohttp import web
 import pytest
 import pytest_asyncio
-from aiohttp import web
 
 from proxy_server import ProxyServer
 
 
-def basic_auth(username="admin", password="password123"):
+def basic_auth(username: str = "admin", password: str = "password123") -> str:
     token = base64.b64encode(f"{username}:{password}".encode()).decode()
     return f"Basic {token}"
 
 
-async def read_http_response(reader):
+async def read_http_response(reader: asyncio.StreamReader) -> tuple[str, dict[str, str], bytes]:
     data = bytearray()
     while b"\r\n\r\n" not in data:
         chunk = await asyncio.wait_for(reader.read(1), timeout=5)
@@ -58,7 +60,7 @@ async def read_http_response(reader):
     return status_line, headers, bytes(body)
 
 
-async def raw_proxy_request(proxy_port, request):
+async def raw_proxy_request(proxy_port: int, request: bytes) -> tuple[str, dict[str, str], bytes]:
     reader, writer = await asyncio.open_connection("127.0.0.1", proxy_port)
     writer.write(request)
     await writer.drain()

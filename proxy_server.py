@@ -1,24 +1,24 @@
 #!/usr/bin/env python3
 """HTTP/HTTPS Proxy Server entrypoint and orchestration layer."""
 
+from __future__ import annotations
+
 import argparse
 import asyncio
 import collections
 import contextvars
 import gc
 import logging
-import os
 import socket
 import sys
 import time
-from typing import Dict, Optional, Tuple
 
 from auth import check_auth as check_basic_auth
 from config import configure_logging, load_config
 from dashboard import AlertHandler, ConnTrack, render_dashboard
 from http_forward import close_session, get_session, handle_http_request, upstream_wants_close, write_response
 from stats import StatsCollector
-from tunnel import connect_upstream, handle_connect, handle_connect_client, tunnel_traffic, tune_socket
+from tunnel import connect_upstream, handle_connect, handle_connect_client, tune_socket, tunnel_traffic
 
 # Log config: time - level - message
 logging.basicConfig(
@@ -108,11 +108,11 @@ class ProxyServer:
         # Rate limiting per client IP
         self.rate_limit_enabled = config.get('rate_limit_enabled', False)
         self.rate_limit_per_minute = config.get('rate_limit_per_minute', 300)
-        self._ip_req_times: Dict[str, collections.deque] = {}
+        self._ip_req_times: dict[str, collections.deque] = {}
 
         # DNS cache for direct CONNECT tunnels (TTL seconds)
         self._dns_ttl = config.get('dns_cache_ttl', 300)
-        self._dns_cache: Dict[str, dict] = {}
+        self._dns_cache: dict[str, dict] = {}
 
         # Max request line / URL length guard (reject pathological requests)
         self.max_request_line_size = config.get('max_request_line_size', 16384)  # 16KB
@@ -122,8 +122,8 @@ class ProxyServer:
 
         # Dashboard terminal refresh mode
         self.display_interval = config.get('display_interval', 5)
-        self._active_connections: Dict[int, ConnTrack] = {}
-        self._recent_alerts = collections.deque(maxlen=5)
+        self._active_connections: dict[int, ConnTrack] = {}
+        self._recent_alerts: collections.deque = collections.deque(maxlen=5)
         self._alert_handler = None
         if self.display_interval > 0:
             self._alert_handler = AlertHandler(self._recent_alerts)
@@ -137,7 +137,7 @@ class ProxyServer:
         self._session_lock = asyncio.Lock()
 
         # Active connection tracking (for graceful shutdown)
-        self._active_writers = set()
+        self._active_writers: set[asyncio.StreamWriter] = set()
         self._shutting_down = False
         self._request_counter = 0
 
@@ -154,7 +154,7 @@ class ProxyServer:
     async def close_session(self):
         await close_session(self)
 
-    def check_auth(self, headers: dict) -> Tuple[bool, Optional[str]]:
+    def check_auth(self, headers: dict[str, str]) -> tuple[bool, str | None]:
         return check_basic_auth(headers, self.auth_enabled, self.username, self.password)
 
     def _check_rate_limit(self, peer_ip: str) -> bool:
@@ -187,7 +187,7 @@ class ProxyServer:
             logger.warning(f"{self.rid_prefix()}Client write stalled > {self.drain_timeout}s, aborting")
             raise
 
-    async def _read_headers(self, reader: asyncio.StreamReader) -> Tuple[dict, int]:
+    async def _read_headers(self, reader: asyncio.StreamReader) -> tuple[dict[str, str], int]:
         headers = Headers()
         total_bytes = 0
         while True:
@@ -204,7 +204,7 @@ class ProxyServer:
                 continue
         return headers, total_bytes
 
-    async def handle_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
+    async def handle_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         # Each connection gets a monotonically increasing request ID (rid).
         self._request_counter += 1
         rid = self._request_counter
@@ -256,10 +256,10 @@ class ProxyServer:
                     break
                 if not request_line:
                     break
-                request_line = request_line.decode('utf-8').strip()
-                logger.debug(f"Request line [{request_count}]: {request_line}")
+                request_line_str = request_line.decode('utf-8').strip()
+                logger.debug(f"Request line [{request_count}]: {request_line_str}")
 
-                parts = request_line.split(' ', 2)
+                parts = request_line_str.split(' ', 2)
                 if len(parts) != 3:
                     self.stats.add_bytes(sent=len(b'HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n'))
                     writer.write(b'HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n')
@@ -282,21 +282,21 @@ class ProxyServer:
                 auth_ok, error_msg = self.check_auth(headers)
                 if not auth_ok:
                     self.stats.auth_failed()
-                    resp = f'HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm="Proxy"\r\nContent-Type: text/plain\r\n\r\n{error_msg}'
-                    self.stats.add_bytes(sent=len(resp))
-                    writer.write(resp.encode('utf-8'))
+                    resp_text = f'HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm="Proxy"\r\nContent-Type: text/plain\r\n\r\n{error_msg}'
+                    self.stats.add_bytes(sent=len(resp_text))
+                    writer.write(resp_text.encode('utf-8'))
                     await self._safe_drain(writer)
                     break
 
                 stats_host_value = headers.get('Host', '').split(':')[0]
                 if method == 'GET' and stats_host_value == self.stats_host:
                     stats_json = self.stats.to_json()
-                    resp = (f'HTTP/1.1 200 OK\r\n'
+                    resp_text = (f'HTTP/1.1 200 OK\r\n'
                             f'Content-Type: application/json\r\n'
                             f'Content-Length: {len(stats_json.encode())}\r\n'
                             f'Connection: close\r\n\r\n{stats_json}')
-                    self.stats.add_bytes(sent=len(resp))
-                    writer.write(resp.encode('utf-8'))
+                    self.stats.add_bytes(sent=len(resp_text))
+                    writer.write(resp_text.encode('utf-8'))
                     await self._safe_drain(writer)
                     break
 
@@ -405,7 +405,7 @@ class ProxyServer:
                 break
             self._render_dashboard()
 
-    async def start_server(self):
+    async def start_server(self) -> None:
         server_kwargs = {
             'host': self.host,
             'port': self.port,
@@ -494,7 +494,7 @@ class ProxyServer:
             gc.collect()
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description='HTTP/HTTPS Proxy Server')
     parser.add_argument('-c', '--config', default='config.yaml', help='Config file path')
     parser.add_argument('--host', help='Listen address')
@@ -526,7 +526,7 @@ def main():
         server = ProxyServer(config)
         asyncio.run(server.start_server())
     except KeyboardInterrupt:
-        print("\nServer stopped")
+        logger.info("Server stopped")
     except Exception as e:
         logger.error(f"Server start failed: {e}")
         sys.exit(1)

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import base64
 import hmac
 import logging
@@ -5,7 +7,8 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-def check_auth(headers, auth_enabled, expected_username, expected_password):
+def check_auth(headers: dict[str, str], auth_enabled: bool,
+               expected_username: str, expected_password: str) -> tuple[bool, str | None]:
     if not auth_enabled:
         return True, None
 

@@ -18,10 +18,12 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import re
 import sys
 import time
+from typing import Any, cast
 
 import aiohttp
 
@@ -52,17 +54,17 @@ def _js_to_json(js_array: str) -> str:
     return js_array
 
 
-def extract_nodes(chunk_text: str) -> list[dict]:
+def extract_nodes(chunk_text: str) -> list[dict[str, Any]]:
     """Try to find a ``let j = [{...}]`` array in the chunk text."""
     match = _NODES_RE.search(chunk_text)
     if not match:
         return []
     js_array = _js_to_json(match.group(1))
-    return json.loads(js_array)
+    return cast(list[dict[str, Any]], json.loads(js_array))
 
 
 async def speed_test_nodes(raw_nodes, *, limit=None, concurrency=_SPEED_TEST_CONCURRENCY,
-                            timeout=_SPEED_TEST_TIMEOUT):
+                            timeout=_SPEED_TEST_TIMEOUT) -> list[dict]:
     """TCP-connect speed test: measure handshake latency for each node.
 
     Returns list of ``{label, value, latency_ms}``.  ``latency_ms`` is null for
@@ -75,7 +77,7 @@ async def speed_test_nodes(raw_nodes, *, limit=None, concurrency=_SPEED_TEST_CON
     nodes_to_test = raw_nodes[:limit] if limit and limit < len(raw_nodes) else raw_nodes
     sem = asyncio.Semaphore(concurrency)
 
-    async def test_one(node):
+    async def test_one(node) -> dict:
         async with sem:
             host = node["value"]
             start = time.perf_counter()
@@ -112,7 +114,7 @@ async def speed_test_nodes(raw_nodes, *, limit=None, concurrency=_SPEED_TEST_CON
     return result
 
 
-async def main():
+async def main() -> None:
     parser = argparse.ArgumentParser(description="Fetch GH mirror node list")
     parser.add_argument("-s", "--source", default=_DEFAULT_SOURCE,
                         help=f"Source URL (default: {_DEFAULT_SOURCE})")
@@ -172,7 +174,6 @@ async def main():
 
 
 if __name__ == "__main__":
-    import asyncio
     if sys.version_info >= (3, 8) and sys.platform == "win32":
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
     asyncio.run(main())
