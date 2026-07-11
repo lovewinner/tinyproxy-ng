@@ -55,6 +55,9 @@ stats.json
 coverage.xml
 htmlcov/
 
+# Scraped data (runtime output, do not commit)
+ghproxy_nodes.json
+
 # Temporary files
 tmp/
 temp/
