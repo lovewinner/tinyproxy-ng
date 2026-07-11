@@ -3,13 +3,16 @@
 
 The site renders nodes as a Next.js SSR app.  The node list is embedded in
 one of the JS chunks under /_next/static/chunks/.  This script walks every
-chunk, extracts the ``let j=[{...}]`` array literal, parses it as JSON, and
-writes the result to a local JSON file.
+chunk, extracts the ``let j=[{...}]`` array literal, parses it as JSON,
+optionally runs a TCP-connect speed test, and writes the result to a local
+JSON file.
 
 Usage:
-    python fetch_ghproxy_nodes.py                          # default output
-    python fetch_ghproxy_nodes.py -o nodes.json            # custom output
-    python fetch_ghproxy_nodes.py -s https://github.akams.cn  # custom source
+    python fetch_ghproxy_nodes.py                              # default output
+    python fetch_ghproxy_nodes.py -o nodes.json                # custom output
+    python fetch_ghproxy_nodes.py -s https://github.akams.cn   # custom source
+    python fetch_ghproxy_nodes.py --speed-test 10               # test only top 10
+    python fetch_ghproxy_nodes.py --speed-test 0                # skip speed test
 """
 
 from __future__ import annotations
@@ -24,6 +27,8 @@ import aiohttp
 
 _DEFAULT_SOURCE = "https://github.akams.cn"
 _DEFAULT_OUTPUT = "ghproxy_nodes.json"
+_SPEED_TEST_CONCURRENCY = 10
+_SPEED_TEST_TIMEOUT = 5
 
 _CHUNK_RE = re.compile(r"/_next/static/chunks/([a-f0-9]+)\.js")
 _NODES_RE = re.compile(r"let\s+j\s*=\s*(\[[^;]*?\])", re.DOTALL)
@@ -56,12 +61,65 @@ def extract_nodes(chunk_text: str) -> list[dict]:
     return json.loads(js_array)
 
 
+async def speed_test_nodes(raw_nodes, *, limit=None, concurrency=_SPEED_TEST_CONCURRENCY,
+                            timeout=_SPEED_TEST_TIMEOUT):
+    """TCP-connect speed test: measure handshake latency for each node.
+
+    Returns list of ``{label, value, latency_ms}``.  ``latency_ms`` is null for
+    nodes that fail to connect within *timeout* seconds.
+    """
+    if limit is not None and limit <= 0:
+        return [{"label": n.get("label", ""), "value": n["value"],
+                 "latency_ms": None} for n in raw_nodes]
+
+    nodes_to_test = raw_nodes[:limit] if limit and limit < len(raw_nodes) else raw_nodes
+    sem = asyncio.Semaphore(concurrency)
+
+    async def test_one(node):
+        async with sem:
+            host = node["value"]
+            start = time.perf_counter()
+            try:
+                _, writer = await asyncio.wait_for(
+                    asyncio.open_connection(host, 443), timeout=timeout,
+                )
+                elapsed = time.perf_counter() - start
+                writer.close()
+                try:
+                    await writer.wait_closed()
+                except Exception:
+                    pass
+                return {
+                    "label": node.get("label", ""),
+                    "value": node["value"],
+                    "latency_ms": round(elapsed * 1000, 1),
+                }
+            except Exception:
+                return {
+                    "label": node.get("label", ""),
+                    "value": node["value"],
+                    "latency_ms": None,
+                }
+
+    tested = await asyncio.gather(*(test_one(n) for n in nodes_to_test))
+    ordered = {n["value"]: n for n in tested}
+
+    result = []
+    for n in raw_nodes:
+        key = n["value"]
+        result.append(ordered.get(key, {"label": n.get("label", ""),
+                                        "value": key, "latency_ms": None}))
+    return result
+
+
 async def main():
     parser = argparse.ArgumentParser(description="Fetch GH mirror node list")
     parser.add_argument("-s", "--source", default=_DEFAULT_SOURCE,
                         help=f"Source URL (default: {_DEFAULT_SOURCE})")
     parser.add_argument("-o", "--output", default=_DEFAULT_OUTPUT,
                         help=f"Output JSON file (default: {_DEFAULT_OUTPUT})")
+    parser.add_argument("--speed-test", type=int, metavar="N",
+                        help="TCP-connect speed test on top N nodes (default: all; 0 = skip)")
     args = parser.parse_args()
 
     fetched_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
@@ -87,11 +145,21 @@ async def main():
                 break
             print(f"  chunk {cid}: no node list")
 
-    if not nodes:
-        print("ERROR: Could not locate node list in any chunk.", file=sys.stderr)
-        sys.exit(1)
+        if not nodes:
+            print("ERROR: Could not locate node list in any chunk.", file=sys.stderr)
+            sys.exit(1)
 
-    data = {
+        if args.speed_test is None or args.speed_test > 0:
+            limit = args.speed_test
+            print(f"  Running speed test on {'all' if limit is None else limit} node(s) "
+                  f"(concurrency={_SPEED_TEST_CONCURRENCY}, timeout={_SPEED_TEST_TIMEOUT}s) ...")
+            nodes = await speed_test_nodes(nodes, limit=limit)
+            ok = sum(1 for n in nodes if n["latency_ms"] is not None)
+            print(f"  Reachable: {ok}/{len(nodes)}")
+        else:
+            print("  Speed test skipped (--speed-test 0)")
+
+        data = {
         "fetched_at": fetched_at,
         "source_url": args.source,
         "nodes": nodes,
