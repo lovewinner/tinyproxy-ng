@@ -12,6 +12,8 @@ Usage:
     python fetch_ghproxy_nodes.py -s https://github.akams.cn  # custom source
 """
 
+from __future__ import annotations
+
 import argparse
 import json
 import re
@@ -102,4 +104,8 @@ async def main():
 
 if __name__ == "__main__":
     import asyncio
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    finally:
+        import gc
+        gc.collect()
