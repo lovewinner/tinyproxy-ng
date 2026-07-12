@@ -19,7 +19,79 @@ A lightweight Python asyncio HTTP/HTTPS proxy server with authentication, CONNEC
 
 ## 2. How to Use
 
-### Install
+### Option A: Docker Deployment (Recommended)
+
+#### Quick Start with Docker Compose
+
+1. Copy environment file:
+```bash
+cp .env.example .env
+```
+
+2. Edit `.env` with your settings:
+```bash
+# Proxy settings
+PROXY_PORT=26128
+USERNAME=your_username
+PASSWORD=your_password
+LOG_LEVEL=INFO
+```
+
+3. Build and run:
+```bash
+# Build the image
+docker-compose build
+
+# Start the service
+docker-compose up -d
+
+# View logs
+docker-compose logs -f
+
+# Stop the service
+docker-compose down
+```
+
+#### Manual Docker Run
+
+```bash
+# Build image
+docker build -t tinyproxy-ng:latest .
+
+# Run container
+docker run -d \
+  --name tinyproxy-ng \
+  -p 26128:26128 \
+  -e AUTH_ENABLED=true \
+  -e USERNAME=your_username \
+  -e PASSWORD=your_password \
+  -v $(pwd)/config.yaml:/app/config.yaml:ro \
+  tinyproxy-ng:latest
+```
+
+#### Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PROXY_HOST` | `0.0.0.0` | Listen address |
+| `PROXY_PORT` | `26128` | Listen port |
+| `AUTH_ENABLED` | `true` | Enable authentication |
+| `USERNAME` | `lovewinner` | Auth username |
+| `PASSWORD` | `ncepu@6868` | Auth password |
+| `LOG_LEVEL` | `INFO` | Log level (DEBUG/INFO/WARNING/ERROR) |
+| `MAX_CONNECTIONS` | `500` | Max concurrent connections |
+| `UPSTREAM_PROXY_HTTP` | (none) | HTTP upstream proxy URL |
+| `UPSTREAM_PROXY_HTTPS` | (none) | HTTPS upstream proxy URL |
+
+#### Docker Volumes
+
+- `/app/config.yaml` - Configuration file (read-only)
+- `/app/stats.json` - Persistent stats
+- `/app/logs` - Log files directory
+
+### Option B: Native Installation
+
+#### Install
 
 ```bash
 pip install aiohttp pyyaml
@@ -27,7 +99,7 @@ pip install aiohttp pyyaml
 
 Python 3.8+ required.  If you need SOCKS5 upstream, also `pip install aiohttp-socks`.
 
-### Configure
+#### Configure
 
 ```bash
 cp config.example.yaml config.yaml
@@ -44,7 +116,7 @@ port: 8080     # change if needed
 
 Leave `upstream_proxies` commented out unless you need an outbound proxy.
 
-### Run
+#### Run
 
 ```bash
 python proxy_server.py
@@ -83,7 +155,15 @@ Configure your browser or OS to use an HTTP proxy at `server-ip:port` with the u
 
 ---
 
-## 3. Features & Configuration Reference
+## 3. Documentation
+
+- **[DOCKER.md](DOCKER.md)** - Complete Docker deployment guide
+- **[k8s/README.md](k8s/README.md)** - Kubernetes deployment guide
+- **[config.example.yaml](config.example.yaml)** - Configuration file template
+
+---
+
+## 4. Features & Configuration Reference
 
 ### Complete Config Table
 

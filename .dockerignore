@@ -1,0 +1,57 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info
+.eggs
+*.egg
+.pytest_cache
+.mypy_cache
+.ruff_cache
+
+# IDE
+.idea
+.vscode
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
+logs/
+
+# Test files
+tests/
+*.test
+test_*.py
+
+# Documentation
+*.md
+!README.md
+
+# Build artifacts
+dist/
+build/
+
+# Config (use config.yaml at runtime)
+config.yaml
+*.tmp
+*.bak
+
+# Stats and data files
+stats.json
+ghproxy_nodes.json
+audit.log
+
+# Scripts (not needed in container)
+scripts/
+
+# Environment files
+.env
+.env.*

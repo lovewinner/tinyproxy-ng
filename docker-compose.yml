@@ -1,0 +1,46 @@
+version: '3.8'
+
+services:
+  proxy-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: tinyproxy-ng:latest
+    container_name: tinyproxy-ng
+    restart: unless-stopped
+    ports:
+      - "${PROXY_PORT:-26128}:26128"
+    volumes:
+      # Persist configuration
+      - ./config.yaml:/app/config.yaml:ro
+      # Persist stats
+      - ./stats.json:/app/stats.json
+      # Persist logs (if log_file is configured)
+      - ./logs:/app/logs
+    environment:
+      # Proxy configuration
+      - PROXY_HOST=0.0.0.0
+      - PROXY_PORT=${PROXY_PORT:-26128}
+      # Authentication (can override config.yaml)
+      - AUTH_ENABLED=${AUTH_ENABLED:-true}
+      - USERNAME=${USERNAME:-lovewinner}
+      - PASSWORD=${PASSWORD:-ncepu@6868}
+      # Logging
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; s=socket.socket(); s.settimeout(5); result=s.connect_ex(('127.0.0.1', 26128)); s.close(); exit(0 if result==0 else 1)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
+    networks:
+      - proxy-network
+    security_opt:
+      - no-new-privileges:true
+    read_only: false
+    tmpfs:
+      - /tmp
+
+networks:
+  proxy-network:
+    driver: bridge

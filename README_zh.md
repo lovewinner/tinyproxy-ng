@@ -19,7 +19,79 @@
 
 ## 2. 快速上手
 
-### 安装依赖
+### 方式 A：Docker 部署（推荐）
+
+#### 使用 Docker Compose 快速启动
+
+1. 复制环境配置文件：
+```bash
+cp .env.example .env
+```
+
+2. 编辑 `.env` 文件，设置你的配置：
+```bash
+# 代理设置
+PROXY_PORT=26128
+USERNAME=your_username
+PASSWORD=your_password
+LOG_LEVEL=INFO
+```
+
+3. 构建并运行：
+```bash
+# 构建镜像
+docker-compose build
+
+# 启动服务
+docker-compose up -d
+
+# 查看日志
+docker-compose logs -f
+
+# 停止服务
+docker-compose down
+```
+
+#### 手动 Docker 运行
+
+```bash
+# 构建镜像
+docker build -t tinyproxy-ng:latest .
+
+# 运行容器
+docker run -d \
+  --name tinyproxy-ng \
+  -p 26128:26128 \
+  -e AUTH_ENABLED=true \
+  -e USERNAME=your_username \
+  -e PASSWORD=your_password \
+  -v $(pwd)/config.yaml:/app/config.yaml:ro \
+  tinyproxy-ng:latest
+```
+
+#### 环境变量说明
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `PROXY_HOST` | `0.0.0.0` | 监听地址 |
+| `PROXY_PORT` | `26128` | 监听端口 |
+| `AUTH_ENABLED` | `true` | 是否启用认证 |
+| `USERNAME` | `lovewinner` | 认证用户名 |
+| `PASSWORD` | `ncepu@6868` | 认证密码 |
+| `LOG_LEVEL` | `INFO` | 日志级别（DEBUG/INFO/WARNING/ERROR） |
+| `MAX_CONNECTIONS` | `500` | 最大并发连接数 |
+| `UPSTREAM_PROXY_HTTP` | (无) | HTTP 上游代理 URL |
+| `UPSTREAM_PROXY_HTTPS` | (无) | HTTPS 上游代理 URL |
+
+#### Docker 数据卷
+
+- `/app/config.yaml` - 配置文件（只读）
+- `/app/stats.json` - 持久化统计数据
+- `/app/logs` - 日志文件目录
+
+### 方式 B：本地安装
+
+#### 安装依赖
 
 ```bash
 pip install aiohttp pyyaml
@@ -27,7 +99,7 @@ pip install aiohttp pyyaml
 
 需 Python 3.8+。如需 SOCKS5 上游，追加 `pip install aiohttp-socks`。
 
-### 配置
+#### 配置
 
 ```bash
 cp config.example.yaml config.yaml
@@ -44,7 +116,7 @@ port: 8080     # 可按需修改
 
 如果不需要上游代理，`upstream_proxies` 保持注释状态即可。
 
-### 启动
+#### 启动
 
 ```bash
 python proxy_server.py

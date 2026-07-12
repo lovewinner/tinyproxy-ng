@@ -1,0 +1,68 @@
+# Proxy server configuration for Docker
+# Supports HTTP and HTTPS proxy
+
+# Server listen configuration
+host: 0.0.0.0              # Listen address (0.0.0.0 for all interfaces in container)
+port: 26128                # Listen port
+
+# Authentication configuration
+# Can be overridden via environment variables:
+# AUTH_ENABLED=true/false
+# USERNAME=your_username
+# PASSWORD=your_password
+auth_enabled: true
+username: lovewinner
+password: ncepu@6868
+
+# Upstream proxy (optional)
+# Can be set via environment variables:
+# UPSTREAM_PROXY_HTTP=http://proxy:8080
+# UPSTREAM_PROXY_HTTPS=http://proxy:8080
+# upstream_proxies:
+#   http: http://upstream-proxy:8080
+#   https: http://upstream-proxy:8080
+
+# Performance tuning
+max_connections: 500       # Can be overridden via MAX_CONNECTIONS env var
+
+# Tunnel timeouts
+tunnel_idle_timeout: 180
+max_tunnel_lifetime: 300
+max_tunnel_lifetime_download: 7200
+download_hosts:
+  - "*.github.com"
+  - "objects.githubusercontent.com"
+  - "raw.githubusercontent.com"
+  - "*.githubusercontent.com"
+
+# Request limits
+max_body_size: 104857600
+max_request_line_size: 16384
+
+# Timeouts
+header_timeout: 15
+drain_timeout: 30
+keepalive_timeout: 30
+
+# Rate limiting
+rate_limit_enabled: false
+rate_limit_per_minute: 300
+
+# DNS cache
+dns_cache_ttl: 300
+
+# Stats collection
+stats_interval: 3600
+stats_file: /app/stats.json
+
+# Dashboard (set to 0 for container logs)
+display_interval: 0
+
+# Logging
+log_level: INFO
+log_file: /app/logs/proxy.log
+log_max_size: 10485760
+log_backup_count: 5
+
+# GitHub mirror acceleration
+gh_mirror_enabled: false
