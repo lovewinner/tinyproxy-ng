@@ -282,6 +282,7 @@ class ProxyServer:
                 auth_ok, error_msg = self.check_auth(headers)
                 if not auth_ok:
                     self.stats.auth_failed()
+                    logger.warning(f"{self.rid_prefix()}Auth failed: {error_msg}")
                     resp_text = f'HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm="Proxy"\r\nContent-Type: text/plain\r\n\r\n{error_msg}'
                     self.stats.add_bytes(sent=len(resp_text))
                     writer.write(resp_text.encode('utf-8'))

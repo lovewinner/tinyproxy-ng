@@ -119,6 +119,13 @@ def render_dashboard(server):
         line = truncate_to_width(line, W)
         lines.append('|' + ljust_display(line, W) + '|')
 
+    if server._recent_alerts:
+        lines.append('+' + sep + '+')
+        for created, lvl, msg in list(server._recent_alerts):
+            ts = time.strftime('%H:%M:%S', time.localtime(created))
+            line = f" [{ts}] {lvl} - {msg}"
+            line = truncate_to_width(line, W)
+            lines.append('|' + ljust_display(line, W) + '|')
     lines.append('+' + sep + '+')
     sys.stdout.write(os.linesep.join(lines))
     sys.stdout.flush()
