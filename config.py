@@ -50,10 +50,10 @@ def load_config(config_file: str = 'config.yaml') -> dict[str, object]:
             logger.warning(f"Invalid PROXY_PORT value: {os.getenv('PROXY_PORT')}")
     if os.getenv('AUTH_ENABLED'):
         default_config['auth_enabled'] = os.getenv('AUTH_ENABLED', 'true').lower() in ('true', '1', 'yes')
-    if os.getenv('USERNAME'):
-        default_config['username'] = os.getenv('USERNAME')
-    if os.getenv('PASSWORD'):
-        default_config['password'] = os.getenv('PASSWORD')
+    if os.getenv('PROXY_USERNAME'):
+        default_config['username'] = os.getenv('PROXY_USERNAME')
+    if os.getenv('PROXY_PASSWORD'):
+        default_config['password'] = os.getenv('PROXY_PASSWORD')
     if os.getenv('LOG_LEVEL'):
         default_config['log_level'] = os.getenv('LOG_LEVEL', 'INFO').upper()
     if os.getenv('UPSTREAM_PROXY_HTTP'):
