@@ -9,6 +9,7 @@ import collections
 import contextvars
 import gc
 import logging
+import os
 import socket
 import sys
 import time
@@ -407,11 +408,15 @@ class ProxyServer:
             self._render_dashboard()
 
     async def start_server(self) -> None:
+        # On Windows, SO_REUSEADDR allows multiple processes to bind the same port
+        # simultaneously, which silently splits traffic across instances. Only enable
+        # it on POSIX where it behaves as desired for fast restart.
         server_kwargs = {
             'host': self.host,
             'port': self.port,
-            'reuse_address': True, # Allow fast restart
         }
+        if os.name != 'nt':
+            server_kwargs['reuse_address'] = True
         # SO_REUSEPORT: Multiple processes can bind same port (Linux/macOS only)
         if hasattr(socket, 'SO_REUSEPORT'):
             server_kwargs['reuse_port'] = True
