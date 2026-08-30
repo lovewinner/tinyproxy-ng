@@ -180,7 +180,7 @@ Configure your browser or OS to use an HTTP proxy at `server-ip:port` with the u
 | `max_request_line_size` | `16384` | Max URL length; oversize → 414 |
 | `tunnel_idle_timeout` | `180 s` | CONNECT tunnel idle timeout |
 | `max_tunnel_lifetime` | `300 s` | Max CONNECT tunnel lifetime |
-| `max_tunnel_lifetime_download` | `7200 s` | Extended lifetime for download hosts |
+| `max_tunnel_lifetime_download` | `172800 s` | Extended lifetime (48h) for download hosts |
 | `download_hosts` | `*.github.com` … | Glob patterns; matched hosts get extended lifetime |
 | `header_timeout` | `15 s` | Request header read timeout (Slowloris protection) |
 | `drain_timeout` | `30 s` | Per-write drain timeout; prevents hangs on slow clients |

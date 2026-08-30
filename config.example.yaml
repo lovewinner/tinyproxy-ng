@@ -64,12 +64,14 @@ drain_timeout: 30             # Per-write drain timeout in seconds, prevents han
 
 # Download tunnel timeout (optional)
 # Hosts matching download_hosts automatically use this timeout to avoid interrupting large downloads
-max_tunnel_lifetime_download: 7200  # Download tunnel max lifetime in seconds (2h)
+max_tunnel_lifetime_download: 172800  # Download tunnel max lifetime in seconds (48h)
 download_hosts:                    # Hosts auto-detected as download targets (glob patterns)
   - "*.github.com"
   - "objects.githubusercontent.com"
   - "raw.githubusercontent.com"
   - "*.githubusercontent.com"
+  - "github.githubassets.com"
+  - "*.github.io"
 header_timeout: 15            # Request header read timeout in seconds, prevents Slowloris attacks
 
 # Performance tuning (optional)

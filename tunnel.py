@@ -54,8 +54,7 @@ async def handle_connect_client(server, reader: asyncio.StreamReader, writer: as
             server.stats.connect_failed()
         server.stats.tunnel_closed()
         tunnel_elapsed = time.perf_counter() - tunnel_start
-        if tunnel_elapsed > server.slow_request_threshold:
-            logger.warning(f"{server.rid_prefix()}CONNECT {target} tunnel ended | {tunnel_elapsed:.1f}s (slow, >{server.slow_request_threshold}s)")
+        logger.info(f"{server.rid_prefix()}CONNECT {target} tunnel ended | {tunnel_elapsed:.1f}s")
     finally:
         server._semaphore.release()
 

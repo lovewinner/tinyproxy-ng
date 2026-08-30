@@ -28,12 +28,14 @@ max_connections: 500       # Can be overridden via MAX_CONNECTIONS env var
 # Tunnel timeouts
 tunnel_idle_timeout: 180
 max_tunnel_lifetime: 300
-max_tunnel_lifetime_download: 7200
+max_tunnel_lifetime_download: 172800
 download_hosts:
   - "*.github.com"
   - "objects.githubusercontent.com"
   - "raw.githubusercontent.com"
   - "*.githubusercontent.com"
+  - "github.githubassets.com"
+  - "*.github.io"
 
 # Request limits
 max_body_size: 104857600

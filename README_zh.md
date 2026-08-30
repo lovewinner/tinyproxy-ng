@@ -172,7 +172,7 @@ python -m pytest
 | `max_request_line_size` | `16384` | 请求 URL 最大长度；超限 → 414 |
 | `tunnel_idle_timeout` | `180 s` | CONNECT 隧道闲置超时 |
 | `max_tunnel_lifetime` | `300 s` | CONNECT 隧道最长存活 |
-| `max_tunnel_lifetime_download` | `7200 s` | 下载类主机延长存活 |
+| `max_tunnel_lifetime_download` | `172800 s` | 下载类主机延长存活（48h） |
 | `download_hosts` | `*.github.com` … | glob 匹配列表；命中则应用延长存活 |
 | `header_timeout` | `15 s` | 请求头读取超时（防 Slowloris） |
 | `drain_timeout` | `30 s` | 单次客户端 drain 超时；防慢客户端永久挂起 |
