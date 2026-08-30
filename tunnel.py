@@ -20,7 +20,7 @@ async def handle_connect_client(server, reader: asyncio.StreamReader, writer: as
         connect_tunnel = await handle_connect(server, reader, writer, target, headers)
         connect_elapsed = time.perf_counter() - connect_start
         if connect_elapsed > server.slow_request_threshold:
-            logger.warning(f"{server.rid_prefix()}CONNECT {target} slow connect (DNS+TLS/TCP handshake) | {connect_elapsed:.1f}s (>{server.slow_request_threshold}s)")
+            logger.warning(f"{server.rid_prefix()}[{server._client_addr(writer)}] CONNECT {target} slow connect (DNS+TLS/TCP handshake) | {connect_elapsed:.1f}s (>{server.slow_request_threshold}s)")
         if connect_tunnel is not None:
             remote_reader, remote_writer = connect_tunnel
 
@@ -58,7 +58,7 @@ async def handle_connect_client(server, reader: asyncio.StreamReader, writer: as
             server.stats.connect_failed()
         server.stats.tunnel_closed()
         tunnel_elapsed = time.perf_counter() - tunnel_start
-        logger.info(f"{server.rid_prefix()}CONNECT {target} tunnel ended | {tunnel_elapsed:.1f}s")
+        logger.info(f"{server.rid_prefix()}[{server._client_addr(writer)}] CONNECT {target} tunnel ended | {tunnel_elapsed:.1f}s")
     finally:
         server._semaphore.release()
 

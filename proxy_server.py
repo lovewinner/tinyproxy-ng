@@ -158,6 +158,11 @@ class ProxyServer:
     def check_auth(self, headers: dict[str, str]) -> tuple[bool, str | None]:
         return check_basic_auth(headers, self.auth_enabled, self.username, self.password)
 
+    @staticmethod
+    def _client_addr(writer: asyncio.StreamWriter) -> str:
+        peer = writer.get_extra_info('peername')
+        return f"{peer[0]}:{peer[1]}" if peer else "unknown"
+
     def _check_rate_limit(self, peer_ip: str) -> bool:
         """Check if peer_ip has exceeded the rate limit. Returns True if allowed."""
         if not self.rate_limit_enabled:
@@ -212,9 +217,9 @@ class ProxyServer:
         _request_id.set(rid)
         peer = writer.get_extra_info('peername')
         if peer:
-            logger.info(f"{self.rid_prefix()}New connection: {peer[0]}:{peer[1]}")
+            logger.info(f"{self.rid_prefix()}[{peer[0]}:{peer[1]}] New connection")
         else:
-            logger.info(f"{self.rid_prefix()}New connection: (unknown address)")
+            logger.info(f"{self.rid_prefix()}[unknown] New connection")
 
         # Rate limiting check per client IP
         if peer and not self._check_rate_limit(peer[0]):
@@ -283,7 +288,7 @@ class ProxyServer:
                 auth_ok, error_msg = self.check_auth(headers)
                 if not auth_ok:
                     self.stats.auth_failed()
-                    logger.warning(f"{self.rid_prefix()}Auth failed: {error_msg}")
+                    logger.warning(f"{self.rid_prefix()}[{self._client_addr(writer)}] Auth failed: {error_msg}")
                     resp_text = f'HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm="Proxy"\r\nContent-Type: text/plain\r\n\r\n{error_msg}'
                     self.stats.add_bytes(sent=len(resp_text))
                     writer.write(resp_text.encode('utf-8'))
