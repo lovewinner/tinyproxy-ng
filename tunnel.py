@@ -16,7 +16,11 @@ async def handle_connect_client(server, reader: asyncio.StreamReader, writer: as
     server.stats.tunnel_opened()
     tunnel_start = time.perf_counter()
     try:
+        connect_start = time.perf_counter()
         connect_tunnel = await handle_connect(server, reader, writer, target, headers)
+        connect_elapsed = time.perf_counter() - connect_start
+        if connect_elapsed > server.slow_request_threshold:
+            logger.warning(f"{server.rid_prefix()}CONNECT {target} slow connect (DNS+TLS/TCP handshake) | {connect_elapsed:.1f}s (>{server.slow_request_threshold}s)")
         if connect_tunnel is not None:
             remote_reader, remote_writer = connect_tunnel
 
