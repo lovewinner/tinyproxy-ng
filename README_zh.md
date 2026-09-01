@@ -90,6 +90,7 @@ python proxy_server.py --host 127.0.0.1 --port 8888 --user admin --passwd secret
 | `password` | — | 认证密码 |
 | `upstream_proxies` | (无) | 按协议指定上游 HTTP/SOCKS5 代理；详见 `config.example.yaml` |
 | `max_connections` | `500` | 最大并发连接数（信号量） |
+| `max_connections_per_host` | `0` | 单目标 HTTP 连接池并发上限；`0` 时仅受全局上限限制 |
 | `max_body_size` | `10 MB` | 请求体上限；超限 → 413 |
 | `max_request_line_size` | `16384` | 请求 URL 最大长度；超限 → 414 |
 | `tunnel_idle_timeout` | `180 s` | CONNECT 隧道闲置超时 |
@@ -97,6 +98,7 @@ python proxy_server.py --host 127.0.0.1 --port 8888 --user admin --passwd secret
 | `max_tunnel_lifetime_download` | `7200 s` | 下载类主机延长存活 |
 | `download_hosts` | `*.github.com` … | glob 匹配列表；命中则应用延长存活 |
 | `header_timeout` | `15 s` | 请求头读取超时（防 Slowloris） |
+| `max_header_size` | `65536` | 请求头总字节数上限 |
 | `drain_timeout` | `30 s` | 单次客户端 drain 超时；防慢客户端永久挂起 |
 | `io_buffer_size` | `65536` | I/O 缓冲区大小（字节） |
 | `socket_sndbuf` | `262144` | 套接字发送缓冲区 |
@@ -105,7 +107,9 @@ python proxy_server.py --host 127.0.0.1 --port 8888 --user admin --passwd secret
 | `keepalive_timeout` | `30 s` | Keep-Alive 闲置超时 |
 | `rate_limit_enabled` | `false` | 启用每 IP 速率限制 |
 | `rate_limit_per_minute` | `300` | 每 IP 每分钟最大请求数（60 s 滑动窗口） |
-| `dns_cache_ttl` | `300 s` | 直连 CONNECT 隧道 DNS 缓存 TTL |
+| `dns_cache_ttl` | `300 s` | HTTP 连接池 DNS 缓存 TTL |
+| `connect_timeout` | `10 s` | 直连 CONNECT 的 TCP 建连超时 |
+| `happy_eyeballs_delay` | `0.25 s` | IPv6/IPv4 并行建连的延迟 |
 | `slow_request_threshold` | `5.0 s` | 超过此阈值打印 WARNING |
 | `stats_interval` | `60 s` | 定期统计日志间隔（0 = 禁用） |
 | `stats_file` | `stats.json` | 统计数据持久化文件 |
@@ -161,7 +165,7 @@ proxy-server/
 | 模块 | 说明 |
 |------|------|
 | **HTTP 转发** | 解析 URL，通过 aiohttp 转发并重试/指数退避；上游缺 Content-Length 时自动重新分块。 |
-| **CONNECT 隧道** | 解析全部地址逐尝试（每地址 10 s 连接超时）；双向透传 + 闲置 + 存活双重超时。 |
+| **CONNECT 隧道** | 使用 Happy Eyeballs 并行竞争 IPv6/IPv4 建连，避免串行回退延迟；双向透传 + 闲置 + 存活双重超时。 |
 | **认证** | HTTP Basic，`hmac.compare_digest` 时序安全比对；407 后保活循环退出。 |
 | **速率限制** | 每 IP 60 s 滑动窗口；超限返回 429。 |
 | **drain 保护** | 每次客户端写入均包裹 `_safe_drain(writer)`，有超时上限，防止慢客户端永久反压挂起。 |

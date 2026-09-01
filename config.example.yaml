@@ -45,6 +45,7 @@ password: password123      # Auth password (must change to a strong one!)
 
 # Concurrency control (optional)
 max_connections: 500          # Max concurrent connections, prevents resource exhaustion
+max_connections_per_host: 0   # Per-target concurrent HTTP connections (0 = global limit only)
 
 # Stability parameters (optional)
 max_body_size: 10485760       # Max request body bytes (default 10MB), returns 413 if exceeded
@@ -56,8 +57,10 @@ max_request_line_size: 16384  # Max request URL length (default 16KB), returns 4
 rate_limit_enabled: false     # Enable per-IP rate limiting (true/false)
 rate_limit_per_minute: 300    # Max requests per minute per client IP
 
-# DNS cache (optional)
-dns_cache_ttl: 300            # DNS cache TTL in seconds for direct CONNECT tunnels
+# DNS and connection setup (optional)
+dns_cache_ttl: 300            # DNS cache TTL in seconds for pooled HTTP requests
+connect_timeout: 10           # Target TCP connection timeout in seconds
+happy_eyeballs_delay: 0.25    # IPv6/IPv4 fallback race delay; lower improves fallback speed
 
 # Client drain timeout (optional)
 drain_timeout: 30             # Per-write drain timeout in seconds, prevents hangs on slow clients
@@ -71,6 +74,7 @@ download_hosts:                    # Hosts auto-detected as download targets (gl
   - "raw.githubusercontent.com"
   - "*.githubusercontent.com"
 header_timeout: 15            # Request header read timeout in seconds, prevents Slowloris attacks
+max_header_size: 65536        # Total request-header limit in bytes, returns 431 when exceeded
 
 # Performance tuning (optional)
 io_buffer_size: 65536         # I/O buffer size (bytes), default 64KB
@@ -98,4 +102,3 @@ display_interval: 5           # Terminal refresh interval in seconds (0 = tradit
 # Log level
 log_level: INFO
 # Options: DEBUG (most verbose), INFO, WARNING, ERROR (errors only)
-

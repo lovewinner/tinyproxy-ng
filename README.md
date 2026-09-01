@@ -90,6 +90,7 @@ Configure your browser or OS to use an HTTP proxy at `server-ip:port` with the u
 | `password` | — | Auth password |
 | `upstream_proxies` | (none) | Upstream HTTP/SOCKS5 proxy per protocol; see `config.example.yaml` |
 | `max_connections` | `500` | Max concurrent connections (semaphore) |
+| `max_connections_per_host` | `0` | Per-origin HTTP pool limit; `0` uses only the global limit |
 | `max_body_size` | `10 MB` | Max request body; oversize → 413 |
 | `max_request_line_size` | `16384` | Max URL length; oversize → 414 |
 | `tunnel_idle_timeout` | `180 s` | CONNECT tunnel idle timeout |
@@ -97,6 +98,7 @@ Configure your browser or OS to use an HTTP proxy at `server-ip:port` with the u
 | `max_tunnel_lifetime_download` | `7200 s` | Extended lifetime for download hosts |
 | `download_hosts` | `*.github.com` … | Glob patterns; matched hosts get extended lifetime |
 | `header_timeout` | `15 s` | Request header read timeout (Slowloris protection) |
+| `max_header_size` | `65536` | Total request-header byte limit |
 | `drain_timeout` | `30 s` | Per-write drain timeout; prevents hangs on slow clients |
 | `io_buffer_size` | `65536` | I/O buffer size (bytes) |
 | `socket_sndbuf` | `262144` | Socket send buffer |
@@ -105,7 +107,9 @@ Configure your browser or OS to use an HTTP proxy at `server-ip:port` with the u
 | `keepalive_timeout` | `30 s` | Keep-alive idle timeout |
 | `rate_limit_enabled` | `false` | Enable per-IP rate limiting |
 | `rate_limit_per_minute` | `300` | Max requests/min per client IP (60 s sliding window) |
-| `dns_cache_ttl` | `300 s` | DNS cache TTL for direct CONNECT tunnels |
+| `dns_cache_ttl` | `300 s` | DNS cache TTL for pooled HTTP requests |
+| `connect_timeout` | `10 s` | Direct CONNECT TCP setup timeout |
+| `happy_eyeballs_delay` | `0.25 s` | IPv6/IPv4 connection-race delay |
 | `slow_request_threshold` | `5.0 s` | Log WARNING if request exceeds this |
 | `stats_interval` | `60 s` | Periodic stats logging interval (0 = disable) |
 | `stats_file` | `stats.json` | Stats persistence file |
@@ -161,7 +165,7 @@ proxy-server/
 | Module | Description |
 |--------|-------------|
 | **HTTP forward** | Parses URL, forwards via aiohttp with retry + exponential backoff; re-chunks response when upstream omits Content-Length. |
-| **CONNECT tunnel** | Resolves all addresses, tries each with per-address 10 s connect timeout; bidirectional relay with idle + lifetime timeouts. |
+| **CONNECT tunnel** | Uses Happy Eyeballs to race IPv6/IPv4 connection attempts, avoiding serial fallback delay; bidirectional relay with idle + lifetime timeouts. |
 | **Auth** | HTTP Basic via `hmac.compare_digest` (timing-safe). 407 breaks keep-alive loop. |
 | **Rate limit** | Per-IP 60 s sliding window; 429 when exceeded. |
 | **Drain protection** | Every client write is wrapped in `_safe_drain(writer)` with configurable timeout; prevents indefinite backpressure hangs. |

@@ -21,6 +21,7 @@ import json
 import sys
 import os
 import socket
+import ssl
 import time
 import logging
 from logging.handlers import RotatingFileHandler
@@ -412,6 +413,7 @@ class ProxyServer:
 
         # Header read total timeout (prevent Slowloris attacks)
         self.header_timeout = config.get('header_timeout', 15)
+        self.max_header_size = config.get('max_header_size', 64 * 1024)
 
         # I/O buffer size (affects throughput)
         self.io_buffer_size = config.get('io_buffer_size', 65536)  # 64KB
@@ -444,9 +446,19 @@ class ProxyServer:
         self.rate_limit_per_minute = config.get('rate_limit_per_minute', 300)
         self._ip_req_times: Dict[str, collections.deque] = {}
 
-        # DNS cache for direct CONNECT tunnels (TTL seconds)
+        # DNS cache TTL for aiohttp's HTTP connection pool (seconds)
         self._dns_ttl = config.get('dns_cache_ttl', 300)
-        self._dns_cache: Dict[str, dict] = {}
+
+        # RFC 8305-style dual-stack connection race.  A short delay avoids a
+        # slow/unreachable IPv6 address serially delaying an otherwise healthy
+        # IPv4 CONNECT tunnel.
+        self.happy_eyeballs_delay = config.get('happy_eyeballs_delay', 0.25)
+        self.connect_timeout = config.get('connect_timeout', 10)
+
+        # 0 means no per-origin cap (the global max_connections still applies).
+        # This is important for a forward proxy, where many clients often fetch
+        # assets from the same CDN origin concurrently.
+        self.max_connections_per_host = config.get('max_connections_per_host', 0)
 
         # Max request line / URL length guard (reject pathological requests)
         self.max_request_line_size = config.get('max_request_line_size', 16384)  # 16KB
@@ -480,9 +492,9 @@ class ProxyServer:
             if self._session is None or self._session.closed:
                 connector = aiohttp.TCPConnector(
                     limit=self.max_connections,  # Match max_connections config
-                    limit_per_host=max(10, self.max_connections // 10),  # Scale with total
+                    limit_per_host=self.max_connections_per_host,
                     keepalive_timeout=30,      # Keepalive idle time
-                    ttl_dns_cache=300,         # DNS cache TTL (seconds)
+                    ttl_dns_cache=self._dns_ttl,
                     enable_cleanup_closed=True, # Auto-cleanup abnormally closed connections
                 )
                 # Layered timeout: connect 10s, read 30s, total 60s
@@ -495,6 +507,10 @@ class ProxyServer:
                 self._session = aiohttp.ClientSession(
                     connector=connector,
                     timeout=timeout,
+                    # A forwarding proxy must relay the upstream entity as-is.  With
+                    # aiohttp's default auto-decompression, Content-Length can refer
+                    # to compressed bytes while the body contains decompressed bytes.
+                    auto_decompress=False,
                 )
         return self._session
 
@@ -508,7 +524,7 @@ class ProxyServer:
             return True, None
 
         # Prefer Proxy-Authorization (proxy standard header), fallback to Authorization
-        auth_header = headers.get('Proxy-Authorization') or headers.get('Authorization')
+        auth_header = headers.get('proxy-authorization') or headers.get('authorization')
         if not auth_header:
             return False, "Authentication required"
         try:
@@ -558,20 +574,54 @@ class ProxyServer:
             raise
 
     async def _read_headers(self, reader: asyncio.StreamReader) -> Tuple[dict, int]:
+        """Read HTTP headers into a case-insensitive (lowercase) mapping.
+
+        Header names are ASCII case-insensitive.  Normalising at the parser
+        boundary keeps authentication, Host handling, and body framing from
+        depending on a client's spelling of a header.
+        """
         headers = {}
         total_bytes = 0
         while True:
             line = await reader.readline()
             total_bytes += len(line)
+            if total_bytes > self.max_header_size:
+                raise ValueError("Request headers exceed configured size limit")
             if not line or line == b'\r\n':
                 break
             try:
-                key, value = line.decode('utf-8').strip().split(': ', 1)
-                headers[key] = value
+                key, value = line.decode('iso-8859-1').strip().split(':', 1)
+                key = key.strip().lower()
+                if not key:
+                    raise ValueError("Invalid request header")
+                value = value.strip()
+                # Multiple fields are generally valid, but accepting duplicate
+                # framing/routing fields creates ambiguous requests.  Merge safe
+                # repeatable fields so ordinary clients with repeated Accept or
+                # Cookie headers continue to work.
+                if key in headers:
+                    if key in {'content-length', 'host', 'transfer-encoding'}:
+                        raise ValueError(f"Duplicate {key} header")
+                    separator = '; ' if key == 'cookie' else ', '
+                    headers[key] = headers[key] + separator + value
+                else:
+                    headers[key] = value
                 logger.debug(f"Header: {key}: {value}")
             except ValueError:
-                continue
+                raise
         return headers, total_bytes
+
+    @staticmethod
+    def _hop_by_hop_headers(headers: dict) -> set:
+        """Return headers that must not be forwarded to an upstream server."""
+        names = {
+            'connection', 'keep-alive', 'proxy-authenticate',
+            'proxy-authorization', 'proxy-connection', 'te', 'trailer',
+            'transfer-encoding', 'upgrade',
+        }
+        for header in ('connection', 'proxy-connection'):
+            names.update(token.strip().lower() for token in headers.get(header, '').split(','))
+        return names
 
     async def handle_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
         # ── Assign a unique RID for this connection ──
@@ -584,9 +634,9 @@ class ProxyServer:
         _request_id.set(rid)
         peer = writer.get_extra_info('peername')
         if peer:
-            logger.info(f"{_rid_prefix()}New connection: {peer[0]}:{peer[1]}")
+            logger.debug(f"{_rid_prefix()}New connection: {peer[0]}:{peer[1]}")
         else:
-            logger.info(f"{_rid_prefix()}New connection: (unknown address)")
+            logger.debug(f"{_rid_prefix()}New connection: (unknown address)")
 
         # Rate limiting check per client IP
         if peer and not self._check_rate_limit(peer[0]):
@@ -646,6 +696,11 @@ class ProxyServer:
                     )
                 except asyncio.TimeoutError:
                     break
+                except ValueError as e:
+                    logger.info(f"{_rid_prefix()}Invalid request headers: {e}")
+                    writer.write(b'HTTP/1.1 431 Request Header Fields Too Large\r\nConnection: close\r\n\r\n')
+                    await self._safe_drain(writer)
+                    break
                 hdr_bytes += len(request_line)
                 self.stats.add_bytes(sent=hdr_bytes)
                 # Track upload bytes via LOCAL rid, NOT self._request_counter
@@ -662,7 +717,7 @@ class ProxyServer:
                     await self._safe_drain(writer)
                     break
 
-                stats_host_value = headers.get('Host', '').split(':')[0]
+                stats_host_value = headers.get('host', '').split(':')[0]
                 if method == 'GET' and stats_host_value == self.stats_host:
                     stats_json = self.stats.to_json()
                     resp = (f'HTTP/1.1 200 OK\r\n'
@@ -702,8 +757,8 @@ class ProxyServer:
                     if not success:
                         break
 
-                    conn = headers.get('Connection', '').lower()
-                    proxy_conn = headers.get('Proxy-Connection', '').lower()
+                    conn = headers.get('connection', '').lower()
+                    proxy_conn = headers.get('proxy-connection', '').lower()
                     if conn == 'close' or proxy_conn == 'close':
                         break
                     if version.upper() == 'HTTP/1.0':
@@ -807,31 +862,21 @@ class ProxyServer:
         proxy_url = upstream_https or upstream_http
 
         if not proxy_url:
-            loop = asyncio.get_event_loop()
-            infos = await loop.getaddrinfo(host, port, type=socket.SOCK_STREAM)
-            seen = set()
-            last_error = None
-            for info in infos:
-                addr_key = (info[0], info[4][0])
-                if addr_key in seen:
-                    continue
-                seen.add(addr_key)
-                try:
-                    remote_reader, remote_writer = await asyncio.wait_for(
-                        asyncio.open_connection(info[4][0], info[4][1]),
-                        timeout=10
-                    )
-                    sock = remote_writer.get_extra_info('socket')
-                    if sock:
-                        self._tune_socket(sock, keepalive=True)
-                    # Warm DNS cache asynchronously
-                    self._dns_cache[host] = {'time': time.monotonic(), 'addr': info[4][0]}
-                    return remote_reader, remote_writer
-                except asyncio.TimeoutError:
-                    last_error = last_error or asyncio.TimeoutError(f"Timed out after {len(seen)} address(es)")
-                except Exception as e:
-                    last_error = e
-            raise last_error or OSError(f"Cannot connect to {host}:{port}")
+            # Let asyncio resolve the hostname and race address families instead
+            # of trying every getaddrinfo result serially.  This removes the
+            # common multi-second IPv6-to-IPv4 fallback delay.
+            remote_reader, remote_writer = await asyncio.wait_for(
+                asyncio.open_connection(
+                    host, port,
+                    happy_eyeballs_delay=self.happy_eyeballs_delay,
+                    interleave=1,
+                ),
+                timeout=self.connect_timeout,
+            )
+            sock = remote_writer.get_extra_info('socket')
+            if sock:
+                self._tune_socket(sock, keepalive=True)
+            return remote_reader, remote_writer
 
         if proxy_url.startswith('socks5'):
             raise Exception(
@@ -842,11 +887,17 @@ class ProxyServer:
         parsed = urlparse(proxy_url)
         proxy_host = parsed.hostname
         proxy_port = parsed.port or 8080
+        if not proxy_host:
+            raise ValueError(f"Invalid upstream proxy URL: {proxy_url!r}")
 
         # HTTP upstream proxy: use CONNECT method to establish tunnel
         logger.debug(f"Proxying CONNECT {host}:{port} -> {proxy_host}:{proxy_port}")
+        ssl_context = ssl.create_default_context() if parsed.scheme == 'https' else None
         remote_reader, remote_writer = await asyncio.wait_for(
-            asyncio.open_connection(proxy_host, proxy_port), timeout=10
+            asyncio.open_connection(
+                proxy_host, proxy_port, ssl=ssl_context,
+                server_hostname=proxy_host if ssl_context else None,
+            ), timeout=10
         )
 
         sock = remote_writer.get_extra_info('socket')
@@ -854,7 +905,13 @@ class ProxyServer:
             self._tune_socket(sock, keepalive=True)
 
         # Send CONNECT request to upstream proxy
-        connect_req = f"CONNECT {host}:{port} HTTP/1.1\r\nHost: {host}:{port}\r\n\r\n"
+        upstream_auth = ''
+        if parsed.username is not None:
+            from urllib.parse import unquote
+            credentials = f"{unquote(parsed.username)}:{unquote(parsed.password or '')}"
+            token = base64.b64encode(credentials.encode('utf-8')).decode('ascii')
+            upstream_auth = f"Proxy-Authorization: Basic {token}\r\n"
+        connect_req = f"CONNECT {host}:{port} HTTP/1.1\r\nHost: {host}:{port}\r\n{upstream_auth}\r\n"
         req_bytes = connect_req.encode()
         self.stats.add_bytes(sent=len(req_bytes))
         remote_writer.write(req_bytes)
@@ -897,7 +954,7 @@ class ProxyServer:
                 host = target
                 port = 443  # HTTPS default port
 
-            logger.info(f"{_rid_prefix()}CONNECT tunnel: {host}:{port}")
+            logger.debug(f"{_rid_prefix()}CONNECT tunnel: {host}:{port}")
 
             # Connect to target (possibly via upstream proxy)
             try:
@@ -938,63 +995,71 @@ class ProxyServer:
                                   method: str, target: str, version: str, headers: dict):
         try:
             req_start = time.perf_counter()
-            # Read request body (supports Content-Length and Transfer-Encoding: chunked)
+            # Read request body (supports Content-Length and Transfer-Encoding:
+            # chunked).  Bodies are allowed on methods other than POST/PUT/PATCH,
+            # so framing headers rather than the method decide whether to read one.
             body = b''
-            if method in ('POST', 'PUT', 'PATCH'):
-                content_length = headers.get('Content-Length')
-                if content_length is not None:
+            content_length = headers.get('content-length')
+            if content_length is not None:
+                try:
                     cl = int(content_length)
-                    if cl > self.max_body_size:
-                        self.stats.add_bytes(sent=len(b'HTTP/1.1 413 Payload Too Large\r\nConnection: close\r\n\r\n'))
+                except ValueError:
+                    writer.write(b'HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\nInvalid Content-Length')
+                    await self._safe_drain(writer)
+                    return False
+                if cl < 0 or cl > self.max_body_size:
+                    self.stats.add_bytes(sent=len(b'HTTP/1.1 413 Payload Too Large\r\nConnection: close\r\n\r\n'))
+                    writer.write(b'HTTP/1.1 413 Payload Too Large\r\nConnection: close\r\n\r\n')
+                    await self._safe_drain(writer)
+                    return False
+                body = await reader.readexactly(cl)
+                self.stats.add_bytes(sent=len(body))
+                ct_body = self._active_connections.get(_request_id.get())
+                if ct_body:
+                    ct_body.bytes_sent += len(body)
+            elif 'chunked' in {v.strip().lower() for v in headers.get('transfer-encoding', '').split(',')}:
+                body_parts = []
+                body_size = 0
+                while True:
+                    size_line = await reader.readline()
+                    if not size_line:
+                        raise ValueError("Unexpected EOF in chunked request body")
+                    self.stats.add_bytes(sent=len(size_line))
+                    try:
+                        chunk_size = int(size_line.split(b';', 1)[0].strip(), 16)
+                    except ValueError as e:
+                        raise ValueError("Invalid chunk size") from e
+                    if chunk_size < 0 or body_size + chunk_size > self.max_body_size:
                         writer.write(b'HTTP/1.1 413 Payload Too Large\r\nConnection: close\r\n\r\n')
                         await self._safe_drain(writer)
                         return False
-                    body = await reader.readexactly(cl)
-                    self.stats.add_bytes(sent=len(body))
-                    ct_body = self._active_connections.get(_request_id.get())
-                    if ct_body:
-                        ct_body.bytes_sent += len(body)
-                elif headers.get('Transfer-Encoding', '').lower() == 'chunked':
-                    while True:
-                        size_line = await reader.readline()
-                        if not size_line:
-                            break
-                        self.stats.add_bytes(sent=len(size_line))
-                        size_line = size_line.strip()
-                        if not size_line:
-                            continue
-                        chunk_size = int(size_line, 16)
-                        if chunk_size == 0:
-                            await reader.readline()
-                            break
-                        if len(body) + chunk_size > self.max_body_size:
-                            self.stats.add_bytes(sent=len(b'HTTP/1.1 413 Payload Too Large\r\nConnection: close\r\n\r\n'))
-                            writer.write(b'HTTP/1.1 413 Payload Too Large\r\nConnection: close\r\n\r\n')
-                            await self._safe_drain(writer)
-                            while True:
-                                try:
-                                    await reader.readexactly(chunk_size)
-                                    await reader.readline()
-                                    size_line = await reader.readline()
-                                    if not size_line:
-                                        break
-                                    chunk_size = int(size_line.strip(), 16)
-                                    if chunk_size == 0:
-                                        await reader.readline()
-                                        break
-                                except Exception:
-                                    break
-                            return False
-                        body += await reader.readexactly(chunk_size)
-                        self.stats.add_bytes(sent=chunk_size)
-                        await reader.readline()
+                    if chunk_size == 0:
+                        # A terminating chunk can contain zero or more trailer
+                        # fields; consume all of them before a keep-alive reuse.
+                        while True:
+                            trailer = await reader.readline()
+                            self.stats.add_bytes(sent=len(trailer))
+                            if not trailer or trailer == b'\r\n':
+                                break
+                        break
+                    chunk = await reader.readexactly(chunk_size)
+                    ending = await reader.readexactly(2)
+                    if ending != b'\r\n':
+                        raise ValueError("Invalid chunk terminator")
+                    body_parts.append(chunk)
+                    body_size += chunk_size
+                    self.stats.add_bytes(sent=chunk_size + len(ending))
+                body = b''.join(body_parts)
+                ct_body = self._active_connections.get(_request_id.get())
+                if ct_body:
+                    ct_body.bytes_sent += len(body)
 
             # Parse full URL
             if target.startswith('http://') or target.startswith('https://'):
                 url = target
             else:
                 # Relative path: build full URL from Host header
-                host = headers.get('Host')
+                host = headers.get('host')
                 if not host:
                     self.stats.add_bytes(sent=len(b'HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\nMissing Host header'))
                     writer.write(b'HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\nMissing Host header')
@@ -1009,13 +1074,14 @@ class ProxyServer:
                 await self._safe_drain(writer)
                 return False
 
-            logger.info(f"{_rid_prefix()}HTTP forward: {method} {url}")
+            logger.debug(f"{_rid_prefix()}HTTP forward: {method} {url}")
 
             # Filter forward headers: remove proxy-specific and hop-by-hop headers
             forward_headers = {}
-            skip_headers = ['proxy-connection', 'proxy-authorization', 'connection', 'host']
+            skip_headers = self._hop_by_hop_headers(headers)
+            skip_headers.add('host')
             for k, v in headers.items():
-                if k.lower() not in skip_headers:
+                if k not in skip_headers:
                     forward_headers[k] = v
 
             # Determine upstream proxy to use (HTTPS requests use https upstream, HTTP uses http upstream)
@@ -1056,7 +1122,7 @@ class ProxyServer:
                                 kwargs['password'] = parsed.password
                             connector = ProxyConnector(**kwargs)
                             # SOCKS5 needs its own ClientSession
-                            async with aiohttp.ClientSession(connector=connector) as socks_session:
+                            async with aiohttp.ClientSession(connector=connector, auto_decompress=False) as socks_session:
                                 async with socks_session.request(
                                     method, url,
                                     headers=forward_headers,
@@ -1064,7 +1130,7 @@ class ProxyServer:
                                     allow_redirects=False,
                                 ) as resp:
                                     await asyncio.wait_for(
-                                        self._write_response(writer, resp),
+                                        self._write_response(writer, resp, method),
                                         timeout=self.drain_timeout * 4,
                                     )
                                     if self._upstream_wants_close(resp):
@@ -1076,7 +1142,7 @@ class ProxyServer:
                             kwargs['proxy'] = proxy_url  # aiohttp native HTTP proxy
                         async with session.request(method, url, **kwargs) as resp:
                             await asyncio.wait_for(
-                                self._write_response(writer, resp),
+                                self._write_response(writer, resp, method),
                                 timeout=self.drain_timeout * 4,
                             )
                             if self._upstream_wants_close(resp):
@@ -1125,23 +1191,30 @@ class ProxyServer:
             logger.error(f"Error handling HTTP request: {e}")
             return False
 
-    async def _write_response(self, writer: asyncio.StreamWriter, resp: aiohttp.ClientResponse):
+    async def _write_response(self, writer: asyncio.StreamWriter, resp: aiohttp.ClientResponse,
+                              request_method: str):
         rid = _request_id.get()
         has_content_length = False
+        body_allowed = request_method.upper() != 'HEAD' and not (
+            100 <= resp.status < 200 or resp.status in (204, 304)
+        )
         try:
             writer.write(f'HTTP/1.1 {resp.status} {resp.reason or ""}\r\n'.encode('utf-8'))
             writer.write(b'Via: 1.1 tinyproxy-ng\r\n')
             for key, value in resp.headers.items():
                 kl = key.lower()
-                if kl not in ['transfer-encoding', 'connection', 'content-encoding',
+                if kl not in ['transfer-encoding', 'connection',
                               'keep-alive', 'proxy-authenticate', 'proxy-connection',
                               'upgrade', 'trailer']:
                     writer.write(f'{key}: {value}\r\n'.encode('utf-8'))
-                    if kl == 'content-length':
+                    if kl == 'content-length' and body_allowed:
                         has_content_length = True
-            if not has_content_length:
+            if body_allowed and not has_content_length:
                 writer.write(b'Transfer-Encoding: chunked\r\n')
             writer.write(b'\r\n')
+            if not body_allowed:
+                await self._safe_drain(writer)
+                return
             async for chunk in resp.content.iter_chunked(self.io_buffer_size):
                 self.stats.add_bytes(received=len(chunk))
                 ct = self._active_connections.get(rid)
