@@ -58,7 +58,8 @@ async def handle_connect_client(server, reader: asyncio.StreamReader, writer: as
             server.stats.connect_failed()
         server.stats.tunnel_closed()
         tunnel_elapsed = time.perf_counter() - tunnel_start
-        logger.info(f"{server.rid_prefix()}[{server._client_addr(writer)}] CONNECT {target} tunnel ended | {tunnel_elapsed:.1f}s")
+        if server.access_log:
+            logger.info(f"{server.rid_prefix()}[{server._client_addr(writer)}] CONNECT {target} tunnel ended | {tunnel_elapsed:.1f}s")
     finally:
         server._semaphore.release()
 
@@ -175,7 +176,8 @@ async def handle_connect(server, reader: asyncio.StreamReader, writer: asyncio.S
             host = target
             port = 443  # HTTPS default port
 
-        logger.info(f"{server.rid_prefix()}CONNECT tunnel: {host}:{port}")
+        if server.access_log:
+            logger.info(f"{server.rid_prefix()}CONNECT tunnel: {host}:{port}")
 
         # Connect to target (possibly via upstream proxy)
         try:
@@ -220,6 +222,7 @@ async def tunnel_traffic(server, client_reader: asyncio.StreamReader, client_wri
     async def forward(src_reader: asyncio.StreamReader, dst_writer: asyncio.StreamWriter, name: str) -> None:
         # ContextVar returns the per-task RID (isolated from other concurrent tasks)
         rid = server.current_rid()
+        pending_bytes = 0
         try:
             while True:
                 data = await asyncio.wait_for(src_reader.read(server.io_buffer_size), timeout=tunnel_idle_timeout)
@@ -237,7 +240,12 @@ async def tunnel_traffic(server, client_reader: asyncio.StreamReader, client_wri
                     else:
                         ct.bytes_received += len(data)
                 dst_writer.write(data)
-                await dst_writer.drain()
+                pending_bytes += len(data)
+                if pending_bytes >= server.write_drain_threshold:
+                    await server._safe_drain(dst_writer)
+                    pending_bytes = 0
+            if pending_bytes:
+                await server._safe_drain(dst_writer)
         except asyncio.TimeoutError:
             logger.debug(f"Tunnel {name} idle timeout closed")
         except asyncio.CancelledError:

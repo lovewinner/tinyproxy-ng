@@ -76,10 +76,12 @@ header_timeout: 15            # Request header read timeout in seconds, prevents
 
 # Performance tuning (optional)
 io_buffer_size: 65536         # I/O buffer size (bytes), default 64KB
+write_drain_threshold: 262144 # Drain after this many queued bytes; reduces per-chunk event-loop overhead
 socket_sndbuf: 262144         # Socket send buffer, default 256KB
 socket_rcvbuf: 262144         # Socket receive buffer, default 256KB
 max_keepalive_requests: 100   # Max keep-alive requests per connection
 keepalive_timeout: 30         # Keep-Alive idle timeout in seconds
+access_log: false              # Per-request access logs; disable for lower latency under high request rates
 
 # Log file configuration (optional)
 # log_file: proxy.log           # Log file path (empty = stdout only)
@@ -100,4 +102,3 @@ display_interval: 5           # Terminal refresh interval in seconds (0 = tradit
 # Log level
 log_level: INFO
 # Options: DEBUG (most verbose), INFO, WARNING, ERROR (errors only)
-

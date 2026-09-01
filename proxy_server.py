@@ -83,6 +83,14 @@ class ProxyServer:
         # I/O buffer size (affects throughput)
         self.io_buffer_size = config.get('io_buffer_size', 65536)  # 64KB
 
+        # Accumulate small writes before yielding to TCP backpressure. This avoids
+        # a drain()/event-loop round trip for every I/O chunk while keeping the
+        # amount queued for a slow client bounded.
+        self.write_drain_threshold = max(
+            self.io_buffer_size,
+            config.get('write_drain_threshold', 262144),
+        )
+
         # Socket send/receive buffer (high bandwidth optimization)
         self.socket_sndbuf = config.get('socket_sndbuf', 262144)  # 256KB
         self.socket_rcvbuf = config.get('socket_rcvbuf', 262144)
@@ -90,6 +98,9 @@ class ProxyServer:
         # Keep-Alive config (client connection reuse)
         self.max_keepalive_requests = config.get('max_keepalive_requests', 100)
         self.keepalive_timeout = config.get('keepalive_timeout', 30)
+        # Per-request logs are expensive under sustained load. Errors, slow-request
+        # warnings and periodic statistics remain enabled independently.
+        self.access_log = config.get('access_log', False)
 
         # Max tunnel lifetime (prevent leaked long connections)
         self.max_tunnel_lifetime = config.get('max_tunnel_lifetime', 300)
@@ -216,9 +227,9 @@ class ProxyServer:
         rid = self._request_counter
         _request_id.set(rid)
         peer = writer.get_extra_info('peername')
-        if peer:
+        if peer and self.access_log:
             logger.info(f"{self.rid_prefix()}[{peer[0]}:{peer[1]}] New connection")
-        else:
+        elif self.access_log:
             logger.info(f"{self.rid_prefix()}[unknown] New connection")
 
         # Rate limiting check per client IP

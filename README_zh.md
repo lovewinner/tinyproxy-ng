@@ -177,10 +177,12 @@ python -m pytest
 | `header_timeout` | `15 s` | 请求头读取超时（防 Slowloris） |
 | `drain_timeout` | `30 s` | 单次客户端 drain 超时；防慢客户端永久挂起 |
 | `io_buffer_size` | `65536` | I/O 缓冲区大小（字节） |
+| `write_drain_threshold` | `262144` | 累积到此排队字节数后执行 drain；降低分块转发的事件循环开销 |
 | `socket_sndbuf` | `262144` | 套接字发送缓冲区 |
 | `socket_rcvbuf` | `262144` | 套接字接收缓冲区 |
 | `max_keepalive_requests` | `100` | 每条 Keep-Alive 连接最大请求数 |
 | `keepalive_timeout` | `30 s` | Keep-Alive 闲置超时 |
+| `access_log` | `false` | 是否输出每请求访问日志；高并发时关闭可降低延迟 |
 | `rate_limit_enabled` | `false` | 启用每 IP 速率限制 |
 | `rate_limit_per_minute` | `300` | 每 IP 每分钟最大请求数（60 s 滑动窗口） |
 | `dns_cache_ttl` | `300 s` | 直连 CONNECT 隧道 DNS 缓存 TTL |

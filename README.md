@@ -185,10 +185,12 @@ Configure your browser or OS to use an HTTP proxy at `server-ip:port` with the u
 | `header_timeout` | `15 s` | Request header read timeout (Slowloris protection) |
 | `drain_timeout` | `30 s` | Per-write drain timeout; prevents hangs on slow clients |
 | `io_buffer_size` | `65536` | I/O buffer size (bytes) |
+| `write_drain_threshold` | `262144` | Queued bytes before drain; reduces per-chunk event-loop overhead |
 | `socket_sndbuf` | `262144` | Socket send buffer |
 | `socket_rcvbuf` | `262144` | Socket receive buffer |
 | `max_keepalive_requests` | `100` | Max requests per keep-alive connection |
 | `keepalive_timeout` | `30 s` | Keep-alive idle timeout |
+| `access_log` | `false` | Per-request access logging; disable to lower latency at high request rates |
 | `rate_limit_enabled` | `false` | Enable per-IP rate limiting |
 | `rate_limit_per_minute` | `300` | Max requests/min per client IP (60 s sliding window) |
 | `dns_cache_ttl` | `300 s` | DNS cache TTL for direct CONNECT tunnels |
@@ -256,7 +258,7 @@ proxy-server/
 | **CONNECT tunnel** | Resolves all addresses, tries each with per-address 10 s connect timeout; bidirectional relay with idle + lifetime timeouts. |
 | **Auth** | HTTP Basic via `hmac.compare_digest` (timing-safe). 407 breaks keep-alive loop. |
 | **Rate limit** | Per-IP 60 s sliding window; 429 when exceeded. |
-| **Drain protection** | Every client write is wrapped in `_safe_drain(writer)` with configurable timeout; prevents indefinite backpressure hangs. |
+| **Drain protection** | Response and tunnel writes drain in bounded batches with a configurable timeout; prevents indefinite backpressure hangs without per-chunk scheduling overhead. |
 | **Stats** | `StatsCollector` — dual-layer (persistent `total` + ephemeral `last_period`), atomic JSON writes. |
 | **Dashboard** | `_active_connections` dict per connection; `_active_display` periodic render; dead entries purged on close. |
 | **Shutdown** | 5 s grace period then force-close all tracked writers + cancel tasks. |

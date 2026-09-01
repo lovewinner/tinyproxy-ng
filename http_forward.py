@@ -126,7 +126,8 @@ async def handle_http_request(server, reader: asyncio.StreamReader, writer: asyn
             await server._safe_drain(writer)
             return False
 
-        logger.info(f"{server.rid_prefix()}HTTP forward: {method} {url}")
+        if server.access_log:
+            logger.info(f"{server.rid_prefix()}HTTP forward: {method} {url}")
 
         # Filter forward headers: remove proxy-specific and hop-by-hop headers
         forward_headers = {}
@@ -247,19 +248,23 @@ async def write_response(server, writer: asyncio.StreamWriter, resp: aiohttp.Cli
     rid = server.current_rid()
     has_content_length = False
     try:
-        writer.write(f'HTTP/1.1 {resp.status} {resp.reason or ""}\r\n'.encode())
-        writer.write(b'Via: 1.1 tinyproxy-ng\r\n')
+        # One header write and batched drains reduce event-loop overhead on the
+        # response hot path without removing slow-client backpressure protection.
+        response_head = bytearray(f'HTTP/1.1 {resp.status} {resp.reason or ""}\r\n'.encode())
+        response_head.extend(b'Via: 1.1 tinyproxy-ng\r\n')
         for key, value in resp.headers.items():
             kl = key.lower()
             if kl not in ['transfer-encoding', 'connection', 'content-encoding',
                           'keep-alive', 'proxy-authenticate', 'proxy-connection',
                           'upgrade', 'trailer']:
-                writer.write(f'{key}: {value}\r\n'.encode())
+                response_head.extend(f'{key}: {value}\r\n'.encode())
                 if kl == 'content-length':
                     has_content_length = True
         if not has_content_length:
-            writer.write(b'Transfer-Encoding: chunked\r\n')
-        writer.write(b'\r\n')
+            response_head.extend(b'Transfer-Encoding: chunked\r\n')
+        response_head.extend(b'\r\n')
+        writer.write(response_head)
+        pending_bytes = len(response_head)
         async for chunk in resp.content.iter_chunked(server.io_buffer_size):
             server.stats.add_bytes(received=len(chunk))
             ct = server._active_connections.get(rid)
@@ -267,11 +272,18 @@ async def write_response(server, writer: asyncio.StreamWriter, resp: aiohttp.Cli
                 ct.bytes_received += len(chunk)
             if not has_content_length:
                 writer.write(f'{len(chunk):x}\r\n'.encode() + chunk + b'\r\n')
+                pending_bytes += len(chunk) + len(f'{len(chunk):x}\r\n') + 2
             else:
                 writer.write(chunk)
-            await server._safe_drain(writer)
+                pending_bytes += len(chunk)
+            if pending_bytes >= server.write_drain_threshold:
+                await server._safe_drain(writer)
+                pending_bytes = 0
         if not has_content_length:
             writer.write(b'0\r\n\r\n')
+            pending_bytes += 5
+        # Flush the final partial batch so a small response is delivered promptly.
+        if pending_bytes:
             await server._safe_drain(writer)
     except (ConnectionResetError, BrokenPipeError):
         logger.debug("Client disconnected during response transfer")
